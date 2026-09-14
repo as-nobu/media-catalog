@@ -6,7 +6,40 @@ import subprocess
 import tempfile
 import shutil
 import json
+import sys
+import warnings
 from PIL import Image, ImageOps, ExifTags
+
+
+def configure_image_limit():
+    # Isolated worker only. Keep a finite limit; Pillow's error threshold is 2x.
+    megapixels = int(os.environ.get('MEDIA_CATALOG_MAX_IMAGE_MP','300'))
+    if not 1 <= megapixels <= 2000:
+        raise ValueError('MEDIA_CATALOG_MAX_IMAGE_MP must be between 1 and 2000.')
+    Image.MAX_IMAGE_PIXELS = megapixels * 1_000_000 // 2
+    warnings.filterwarnings('ignore',category=Image.DecompressionBombWarning)
+    return megapixels
+
+
+def find_ffmpeg():
+    configured = os.environ.get('MEDIA_CATALOG_FFMPEG')
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+        raise RuntimeError('MEDIA_CATALOG_FFMPEG does not point to an existing FFmpeg executable.')
+    found = shutil.which('ffmpeg')
+    if found:
+        return found
+    # Conda on Windows can omit Library/bin from PATH when launched via python.exe.
+    for root in dict.fromkeys((sys.prefix,os.environ.get('CONDA_PREFIX',''))):
+        if not root:
+            continue
+        for relative in ('Library/bin/ffmpeg.exe','Scripts/ffmpeg.exe','bin/ffmpeg','ffmpeg.exe'):
+            candidate = Path(root)/relative
+            if candidate.is_file():
+                return str(candidate)
+    raise RuntimeError('FFmpegが見つかりません。使用中のConda環境で conda install -c conda-forge ffmpeg を実行し、アプリを再起動してください。')
 
 
 def image_metadata(path):
@@ -46,8 +79,9 @@ def copy_source(source, output):
 
 
 def fit_page(image, size):
+    # Shrink before the EXIF copy/rotation to avoid another full-resolution buffer.
+    image.thumbnail(size,Image.Resampling.LANCZOS)
     page = ImageOps.exif_transpose(image)
-    page.thumbnail(size,Image.Resampling.LANCZOS)
     rgba = page.convert('RGBA')
     rgb = Image.new('RGB',rgba.size,'white')
     rgb.paste(rgba,mask=rgba.getchannel('A'))
@@ -88,6 +122,7 @@ def save_pages(pages,output,metadata=None):
 
 
 def generate(source, kind, output):
+    configure_image_limit()
     if os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(output)):
         raise ValueError('元ファイルを出力先にはできません。')
     if kind == 'copy':
@@ -96,6 +131,7 @@ def generate(source, kind, output):
     if kind == 'powerpoint' and os.stat(source).st_size == 0:
         save_empty(output,'空ファイル（0 bytes）')
         return
+    ffmpeg = find_ffmpeg() if kind == 'video' else None
     with tempfile.TemporaryDirectory(prefix='decode-',dir=Path(output).parent) as temp:
         staged = str(Path(temp)/('source'+Path(source).suffix))
         copy_source(source,staged)
@@ -108,7 +144,7 @@ def generate(source, kind, output):
         elif kind == 'video':
             image_path = str(Path(temp)/'frame.png')
             # First decodable frame; no whole-file probing or hashing.
-            subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-nostdin','-y',
+            subprocess.run([ffmpeg,'-hide_banner','-loglevel','error','-nostdin','-y',
                 '-i',source,'-frames:v','1','-vf','scale=512:512:force_original_aspect_ratio=decrease',image_path],
                 check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,
                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -153,4 +189,14 @@ if __name__ == '__main__':
     parser.add_argument('kind')
     parser.add_argument('output')
     args = parser.parse_args()
-    generate(args.source,args.kind,args.output)
+    try:
+        generate(args.source,args.kind,args.output)
+    except Image.DecompressionBombError:
+        print('画像の画素数が設定上限を超えています。必要なら MEDIA_CATALOG_MAX_IMAGE_MP を増やしてください（既定300MP）。',file=sys.stderr)
+        sys.exit(1)
+    except MemoryError:
+        print('画像の展開に必要なメモリが不足しています。他のアプリを閉じて再試行してください。',file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f'{type(exc).__name__}: {exc}',file=sys.stderr)
+        sys.exit(1)

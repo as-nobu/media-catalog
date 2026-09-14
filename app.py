@@ -18,10 +18,12 @@ from PySide6.QtGui import QIcon, QPixmap, QDesktopServices, QAction, QColor, QCu
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTreeWidget, QTreeWidgetItem, QListView, QSplitter, QCheckBox,
     QLineEdit, QSpinBox, QLabel, QFileDialog, QMessageBox, QSystemTrayIcon, QMenu,
-    QAbstractItemView, QStyle)
+    QAbstractItemView, QStyle, QComboBox)
 from PySide6.QtWidgets import QTreeWidgetItemIterator, QDialog, QStyledItemDelegate, QPlainTextEdit
 from datetime import datetime
 from catalog import Catalog, norm, within
+from i18n import set_language, get_language, tr, translate_message, static_source
+from qt_i18n import install_dialog_translator
 
 
 class Service(QThread):
@@ -233,10 +235,10 @@ class ThumbnailModel(QAbstractListModel):
             return None
         row = self.items[index.row()]
         if role == Qt.ItemDataRole.DisplayRole:
-            mark = '［削除候補］' if row['missing'] else '［タイムアウト］' if row['timed_out'] else '［生成エラー］' if row['error'] else ''
-            pages = f"［{row['page_count']}ページ］" if row.get('page_count',1)>1 else ''
+            mark = tr('［削除候補］') if row['missing'] else tr('［タイムアウト］') if row['timed_out'] else tr('［生成エラー］') if row['error'] else ''
+            pages = tr('［{v0}ページ］',v0=row['page_count']) if row.get('page_count',1)>1 else ''
             if row.get('page_count')==0:
-                pages = '［空のPPT］'
+                pages = tr('［空のPPT］')
             return ('★ ' if row.get('favorite') else '')+mark+pages+row['name']
         if role == Qt.ItemDataRole.ToolTipRole:
             return row['path']+f"\n{row['size']:,} bytes"+ ('\n'+row['error'] if row['error'] else '')
@@ -286,7 +288,7 @@ class PageModel(ThumbnailModel):
 
     def data(self,index,role=Qt.ItemDataRole.DisplayRole):
         if index.isValid() and role==Qt.ItemDataRole.DisplayRole:
-            return f"{self.items[index.row()]['page_number']} ページ"
+            return tr('{v0} ページ',v0=self.items[index.row()]['page_number'])
         return super().data(index,role)
 
     def load(self,key):
@@ -485,7 +487,7 @@ class PagesWindow(QDialog):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.db,self.uid = db,row['registration_uid']
-        self.setWindowTitle('全ページ — '+row['name'])
+        self.setWindowTitle(tr('全ページ — ')+row['name'])
         self.resize(900,700)
         layout = QVBoxLayout(self)
         self.status = QLabel()
@@ -510,7 +512,7 @@ class PagesWindow(QDialog):
     def refresh_pages(self):
         row = self.db.file_record(self.uid)
         if row is None:
-            self.status.setText('カタログから登録が解除されました。')
+            self.status.setText(tr('カタログから登録が解除されました。'))
             self.model.reset([])
             self.view.clear_hover()
             return
@@ -520,12 +522,12 @@ class PagesWindow(QDialog):
             self.view.clear_hover()
             self.model.reset([dict(row,page_number=i) for i in range(1,row['page_count']+1)])
         pending = row['thumb_size'] is None or row['thumb_size']!=row['size'] or row['thumb_mtime']!=row['mtime_ns']
-        note = ' / 更新待ち（保存済みの画像を表示）' if pending else ''
+        note = tr(' / 更新待ち（保存済みの画像を表示）') if pending else ''
         if row['timed_out']:
-            note = ' / タイムアウト保留：メイン画面から再試行してください'
+            note = tr(' / タイムアウト保留：メイン画面から再試行してください')
         elif row['error']:
-            note = ' / 生成エラー：メイン画面の項目で詳細を確認してください'
-        self.status.setText(f"{row['page_count']} ページ — ホバーで最大512px表示"+note)
+            note = tr(' / 生成エラー：メイン画面の項目で詳細を確認してください')
+        self.status.setText(tr('{v0} ページ — ホバーで最大512px表示',v0=row['page_count'])+note)
 
     def closeEvent(self,event):
         self.timer.stop()
@@ -540,13 +542,14 @@ class DetailsWindow(QWidget):
     def __init__(self, db, row, parent=None):
         super().__init__(parent)
         self.db, self.uid = db, row['registration_uid']
-        self.setWindowTitle('メタ情報・メモ — '+row['name'])
+        self.setWindowTitle(tr('メタ情報・メモ — ')+row['name'])
         self.resize(720,720)
         layout = QVBoxLayout(self)
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
         layout.addWidget(self.info,2)
-        layout.addWidget(QLabel('ユーザーメモ（DBに保存）'))
+        self.memo_label = QLabel('ユーザーメモ（DBに保存）')
+        layout.addWidget(self.memo_label)
         self.memo = QPlainTextEdit()
         self.previous = row.get('memo','')
         self.memo.setPlainText(self.previous)
@@ -576,13 +579,13 @@ class DetailsWindow(QWidget):
     def queue_save(self,*args):
         if self.loading or self.uid is None:
             return
-        self.status.setText('未保存（ファイル切り替え・終了時に保存）' if self.dirty() else '保存済み')
+        self.status.setText(tr('未保存（ファイル切り替え・終了時に保存）') if self.dirty() else tr('保存済み'))
 
     def set_row(self,row):
         self.loading = True
         if row is None:
             self.uid = None
-            self.info.setPlainText('ファイルを選択してください。')
+            self.info.setPlainText(tr('ファイルを選択してください。'))
             self.memo.clear()
             self.tags.clear()
             self.favorite.setChecked(False)
@@ -606,23 +609,23 @@ class DetailsWindow(QWidget):
             return
         row = self.db.file_record(self.uid)
         if row is None:
-            self.status.setText('登録が解除されました。必要なメモはコピーして保管してください。')
+            self.status.setText(tr('登録が解除されました。必要なメモはコピーして保管してください。'))
             return
         try:
             metadata = json.loads(row['metadata_json'])
         except (ValueError,TypeError):
             metadata = {}
-        lines = [row['path'], f"種類: {row['kind']}", f"サイズ: {row['size']:,} bytes",
-                 '更新日時: '+datetime.fromtimestamp(row['mtime_ns']/1e9).isoformat(' ',timespec='seconds'),
-                 f"ページ数: {row['page_count']}", 'エラー: '+(row['error'] or 'なし')]
+        lines = [row['path'], tr('種類: {v0}',v0=row['kind']), tr('サイズ: {v0:,} bytes',v0=row['size']),
+                 tr('更新日時: ')+datetime.fromtimestamp(row['mtime_ns']/1e9).isoformat(' ',timespec='seconds'),
+                 tr('ページ数: {v0}',v0=row['page_count']), tr('エラー: ')+(translate_message(row['error']) if row['error'] else tr('なし'))]
         if row['missing']:
-            lines.append('状態: 削除候補')
+            lines.append(tr('状態: 削除候補'))
         if row['thumb_size'] != row['size'] or row['thumb_mtime'] != row['mtime_ns']:
-            lines.append('生成待ち：表示中のメタ情報は前回取得分の場合があります。')
-        lines.append('\n画像メタ情報（先頭ページ）')
-        lines.extend(f'{k}: {v}' for k,v in metadata.items())
+            lines.append(tr('生成待ち：表示中のメタ情報は前回取得分の場合があります。'))
+        lines.append(tr('\n画像メタ情報（先頭ページ）'))
+        lines.extend(f'{tr(k)}: {translate_message(str(v)) if k in ("状態","EXIF取得エラー") else v}' for k,v in metadata.items())
         if not metadata:
-            lines.append('未取得（画像は右クリックの再スキャン・再生成で取得）' if row['kind']=='image' else '画像メタ情報の対象外')
+            lines.append(tr('未取得（画像は右クリックの再スキャン・再生成で取得）') if row['kind']=='image' else tr('画像メタ情報の対象外'))
         text = '\n'.join(lines)
         if self.info.toPlainText() != text:
             self.info.setPlainText(text)
@@ -634,25 +637,25 @@ class DetailsWindow(QWidget):
         try:
             ok = self.db.save_annotations(self.uid,text,self.tags.text(),self.favorite.isChecked(),self.previous_annotations)
         except Exception as exc:
-            self.status.setText('保存失敗: '+str(exc))
+            self.status.setText(tr('保存失敗: ')+translate_message(str(exc)))
             if not automatic:
-                QMessageBox.warning(self,'保存失敗',str(exc))
+                QMessageBox.warning(self,tr('保存失敗'),translate_message(str(exc)))
             return False
         if not ok:
-            self.status.setText('未保存：登録解除または編集の競合。入力内容をコピーして保管し、アプリを開き直してください。')
+            self.status.setText(tr('未保存：登録解除または編集の競合。入力内容をコピーして保管し、アプリを開き直してください。'))
             if not automatic:
-                QMessageBox.warning(self,'保存できません',self.status.text())
+                QMessageBox.warning(self,tr('保存できません'),self.status.text())
             return False
         self.previous = text
         tags = ', '.join(dict.fromkeys(t.strip() for t in self.tags.text().replace('、',',').split(',') if t.strip()))
         self.previous_annotations = (text,tags,int(self.favorite.isChecked()))
-        self.status.setText('保存済み')
+        self.status.setText(tr('保存済み'))
         self.saved.emit()
         return True
 
     def closeEvent(self,event):
         if self.dirty() and not self.save(automatic=True):
-            answer = QMessageBox.question(self,'未保存のメモ','メモを保存して閉じますか？',
+            answer = QMessageBox.question(self,tr('未保存のメモ'),tr('メモを保存して閉じますか？'),
                 QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Save)
             if answer == QMessageBox.StandardButton.Cancel or (answer == QMessageBox.StandardButton.Save and not self.save()):
@@ -666,6 +669,8 @@ class Window(QMainWindow):
     def __init__(self, db):
         super().__init__()
         self.db = db
+        set_language(db.get_setting('language','ja'))
+        install_dialog_translator()
         self.exiting = False
         self.setWindowTitle('Media Catalog — 画像・動画・PowerPoint')
         self.setWindowIcon(QIcon(str(Path(__file__).with_name('assets')/'media_catalog.ico')))
@@ -680,6 +685,14 @@ class Window(QMainWindow):
             button = QPushButton(text)
             button.clicked.connect(callback)
             bar.addWidget(button)
+        bar.addStretch()
+        self.language_label = QLabel('言語')
+        bar.addWidget(self.language_label)
+        self.language_combo = QComboBox()
+        self.language_combo.addItem('日本語','ja')
+        self.language_combo.addItem('English','en')
+        self.language_combo.setCurrentIndex(1 if get_language()=='en' else 0)
+        bar.addWidget(self.language_combo)
         filters = QHBoxLayout()
         layout.addLayout(filters)
         self.search = QLineEdit()
@@ -795,7 +808,7 @@ class Window(QMainWindow):
         self.pause_button.setChecked(self.service.paused)
         self.service.changed.connect(self.schedule_refresh)
         self.service.progress.connect(self.receive_progress)
-        self.service.message.connect(lambda msg:self.statusBar().showMessage(msg))
+        self.service.message.connect(lambda msg:self.statusBar().showMessage(translate_message(msg)))
         self.service.copy_ready.connect(self.open_local_copy)
         self.generate.toggled.connect(self.settings_changed)
         self.interval.valueChanged.connect(self.settings_changed)
@@ -811,6 +824,8 @@ class Window(QMainWindow):
         self.tray.activated.connect(lambda reason:self.show_window() if reason==QSystemTrayIcon.ActivationReason.DoubleClick else None)
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
+        self.retranslate_ui(refresh=False)
+        self.language_combo.currentIndexChanged.connect(self.change_language)
         self.refresh()
         self.service.start()
 
@@ -818,6 +833,48 @@ class Window(QMainWindow):
         # Throttle, rather than restart, to avoid starving updates during generation.
         if not self.refresh_timer.isActive():
             self.refresh_timer.start(350)
+
+    @staticmethod
+    def _translate_property(obj, property_name, getter, setter):
+        source = obj.property(property_name)
+        if source is None:
+            source = static_source(getter())
+            obj.setProperty(property_name,source)
+        setter(tr(source))
+
+    def retranslate_ui(self,refresh=True):
+        self.setWindowTitle(tr('Media Catalog — 画像・動画・PowerPoint'))
+        self.view.clear_hover()
+        for widget in self.findChildren(QWidget):
+            if isinstance(widget,(QLabel,QPushButton,QCheckBox)) and widget not in (self.view.popup,self.details.status,self.count,self.progress_label,self.pause_button):
+                self._translate_property(widget,'i18nText',widget.text,widget.setText)
+            if isinstance(widget,QLineEdit):
+                self._translate_property(widget,'i18nPlaceholder',widget.placeholderText,widget.setPlaceholderText)
+            if isinstance(widget,QSpinBox):
+                self._translate_property(widget,'i18nSuffix',widget.suffix,widget.setSuffix)
+        for action in self.findChildren(QAction):
+            self._translate_property(action,'i18nText',action.text,action.setText)
+        self.tree.setHeaderLabel(tr('登録フォルダ'))
+        if self.details.uid:
+            self.details.reload_info()
+            self.details.status.setText(tr(static_source(self.details.status.text())))
+        else:
+            self.details.info.setPlainText(tr('ファイルを選択してください。'))
+        self.pause_button.setText(tr('生成を再開') if self.service.paused else tr('生成を一時停止'))
+        self.update_progress()
+        if refresh:
+            self._tree_signature = None
+            self.refresh()
+            if self.model.rowCount():
+                self.model.dataChanged.emit(self.model.index(0),self.model.index(self.model.rowCount()-1))
+
+    def change_language(self,index):
+        language = self.language_combo.itemData(index)
+        set_language(language)
+        self.db.set_setting('language',language)
+        install_dialog_translator()
+        self.statusBar().clearMessage()
+        self.retranslate_ui()
 
     def save_panel_sizes(self,*args):
         if self.details.isVisible():
@@ -852,11 +909,11 @@ class Window(QMainWindow):
             self._tree_signature = signature
             self.tree.blockSignals(True)
             self.tree.clear()
-            all_item = QTreeWidgetItem(self.tree,['すべて'])
+            all_item = QTreeWidgetItem(self.tree,[tr('すべて')])
             all_item.setData(0,Qt.ItemDataRole.UserRole,None)
             nodes = {}
             for root in roots:
-                label = root['path']+ (' ［確認不能］' if root['error'] else '')
+                label = root['path']+ (tr(' ［確認不能］') if root['error'] else '')
                 item = QTreeWidgetItem(self.tree,[label])
                 item.setData(0,Qt.ItemDataRole.UserRole,root['path'])
                 item.setToolTip(0,root['error'] or root['path'])
@@ -897,7 +954,7 @@ class Window(QMainWindow):
             elif not self.details.dirty():
                 self.details.set_row(None)
         self.view.selectionModel().blockSignals(False)
-        self.count.setText(f"{len(rows):,} 件 / 削除候補 {sum(r['missing'] for r in rows):,} / タイムアウト {sum(r['timed_out'] for r in rows):,}")
+        self.count.setText(tr('{v0:,} 件 / 削除候補 {v1:,} / タイムアウト {v2:,}',v0=len(rows),v1=sum(r['missing'] for r in rows),v2=sum(r['timed_out'] for r in rows)))
 
     def settings_changed(self,*args):
         self.service.interval = self.interval.value()*60
@@ -909,19 +966,19 @@ class Window(QMainWindow):
         self.service.wake.set()
 
     def add_folder(self):
-        folder = QFileDialog.getExistingDirectory(self,'登録するフォルダ')
+        folder = QFileDialog.getExistingDirectory(self,tr('登録するフォルダ'))
         if folder:
             try:
                 message = self.db.add_root(folder)
                 self.refresh()
                 self.scan()
-                self.statusBar().showMessage(message)
+                self.statusBar().showMessage(translate_message(message))
             except Exception as exc:
-                QMessageBox.warning(self,'登録できません',str(exc))
+                QMessageBox.warning(self,tr('登録できません'),translate_message(str(exc)))
 
     def scan(self):
         self.service.request_scan()
-        self.statusBar().showMessage('スキャンを予約しました。取得・生成とは独立して実行します。')
+        self.statusBar().showMessage(tr('スキャンを予約しました。取得・生成とは独立して実行します。'))
 
     def selected_ids(self):
         return [self.model.items[i.row()]['id'] for i in self.view.selectedIndexes()]
@@ -934,24 +991,24 @@ class Window(QMainWindow):
     def remove_selected(self):
         candidates = [self.model.items[i.row()] for i in self.view.selectedIndexes() if self.model.items[i.row()]['missing']]
         if not candidates:
-            QMessageBox.information(self,'削除候補','削除候補の項目を選択してください。Ctrl+Aで表示中の全件を選択できます。')
+            QMessageBox.information(self,tr('削除候補'),tr('削除候補の項目を選択してください。Ctrl+Aで表示中の全件を選択できます。'))
             return
         prompt = QMessageBox(self)
-        prompt.setWindowTitle('カタログから削除')
-        prompt.setText(f'{len(candidates)}件のファイル情報・サムネイル・メタ情報・メモ・タグ・お気に入りをカタログから削除しますか？')
-        prompt.setInformativeText('元ファイルには操作しません。削除前に存在を再確認します。')
+        prompt.setWindowTitle(tr('カタログから削除'))
+        prompt.setText(tr('{v0}件のファイル情報・サムネイル・メタ情報・メモ・タグ・お気に入りをカタログから削除しますか？',v0=len(candidates)))
+        prompt.setInformativeText(tr('元ファイルには操作しません。削除前に存在を再確認します。'))
         prompt.setDetailedText('\n'.join(r['path'] for r in candidates))
         prompt.setStandardButtons(QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.Cancel)
         prompt.setDefaultButton(QMessageBox.StandardButton.Cancel)
         if prompt.exec()==QMessageBox.StandardButton.Yes:
             removed, restored, errors = self.db.confirm_removal([r['id'] for r in candidates])
-            QMessageBox.information(self,'処理結果',f'カタログから削除: {removed}件\n再出現: {restored}件\n確認不能で保留: {len(errors)}件')
+            QMessageBox.information(self,tr('処理結果'),tr('カタログから削除: {v0}件\n再出現: {v1}件\n確認不能で保留: {v2}件',v0=removed,v1=restored,v2=len(errors)))
             self.refresh()
 
     def open_file(self,index):
         row = self.model.items[index.row()]
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(row['path'])):
-            QMessageBox.warning(self,'開けません','元ファイルの場所と既定アプリを確認してください。')
+            QMessageBox.warning(self,tr('開けません'),tr('元ファイルの場所と既定アプリを確認してください。'))
 
     def explore(self,folder):
         try:
@@ -960,7 +1017,7 @@ class Window(QMainWindow):
             else:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
         except OSError as exc:
-            QMessageBox.warning(self,'フォルダを開けません',str(exc))
+            QMessageBox.warning(self,tr('フォルダを開けません'),translate_message(str(exc)))
 
     def selection_changed(self,current,previous):
         if self.details.dirty() and not self.details.save():
@@ -975,7 +1032,7 @@ class Window(QMainWindow):
         self.service.paused = paused
         self.db.set_setting('paused',int(paused))
         self.service.wake.set()
-        self.pause_button.setText('生成を再開' if paused else '生成を一時停止')
+        self.pause_button.setText(tr('生成を再開') if paused else tr('生成を一時停止'))
         self.update_progress()
 
     def receive_progress(self,jobs):
@@ -983,17 +1040,18 @@ class Window(QMainWindow):
 
     def update_progress(self):
         counts = self.db.generation_counts()
-        state = '一時停止（処理中は完了まで継続）' if self.service.paused else ('自動生成OFF' if not self.service.generate else '生成中')
-        self.progress_label.setText(f"{state} | 完了 {counts['complete']} / 全体 {counts['total']} | 未完了 {counts['pending']} | タイムアウト {counts['timeout']} | エラー {counts['errors']} | 処理中 {len(self.active_jobs)}\n" +
-            ' / '.join(f'{name} ({seconds}秒)' for name,seconds in self.active_jobs))
+        state = tr('一時停止（処理中は完了まで継続）') if self.service.paused else (tr('自動生成OFF') if not self.service.generate else tr('生成中'))
+        self.progress_label.setText(tr('{v0} | 完了 {v1} / 全体 {v2} | 未完了 {v3} | タイムアウト {v4} | エラー {v5} | 処理中 {v6}\n',
+            v0=state,v1=counts['complete'],v2=counts['total'],v3=counts['pending'],v4=counts['timeout'],v5=counts['errors'],v6=len(self.active_jobs))+
+            ' / '.join(tr('{v0} ({v1}秒)',v0=name,v1=seconds) for name,seconds in self.active_jobs))
 
     def backup_db(self):
         if getattr(self,'backup_running',False):
-            self.statusBar().showMessage('バックアップの保存中です。')
+            self.statusBar().showMessage(tr('バックアップの保存中です。'))
             return
         if self.details.dirty() and not self.details.save():
             return
-        path,_ = QFileDialog.getSaveFileName(self,'DBを新しいファイルに保存',
+        path,_ = QFileDialog.getSaveFileName(self,tr('DBを新しいファイルに保存'),
             'MediaCatalog-'+datetime.now().strftime('%Y%m%d-%H%M%S')+'.sqlite3','SQLite (*.sqlite3)')
         if not path:
             return
@@ -1001,7 +1059,7 @@ class Window(QMainWindow):
         self.backup_signals = LoaderSignals()
         self.backup_signals.ready.connect(self.backup_finished)
         self.backup_pool = ThreadPoolExecutor(max_workers=1)
-        self.statusBar().showMessage('DBバックアップを保存中…')
+        self.statusBar().showMessage(tr('DBバックアップを保存中…'))
         def run():
             try:
                 self.db.backup(path)
@@ -1014,9 +1072,9 @@ class Window(QMainWindow):
         self.backup_running = False
         self.backup_pool.shutdown(wait=False)
         if error:
-            QMessageBox.warning(self,'バックアップ失敗',error+'\n既存ファイルは上書きしません。別の名前を指定してください。')
+            QMessageBox.warning(self,tr('バックアップ失敗'),translate_message(error)+tr('\n既存ファイルは上書きしません。別の名前を指定してください。'))
         else:
-            QMessageBox.information(self,'バックアップ完了',path)
+            QMessageBox.information(self,tr('バックアップ完了'),path)
 
     def file_menu(self,position):
         index = self.view.indexAt(position)
@@ -1024,9 +1082,9 @@ class Window(QMainWindow):
             return
         row = dict(self.model.items[index.row()])
         menu = QMenu(self)
-        open_action = menu.addAction('元ファイルを開く')
-        explore_action = menu.addAction('エクスプローラーで保存フォルダを開く')
-        retry_action = menu.addAction('再スキャン・再生成')
+        open_action = menu.addAction(tr('元ファイルを開く'))
+        explore_action = menu.addAction(tr('エクスプローラーで保存フォルダを開く'))
+        retry_action = menu.addAction(tr('再スキャン・再生成'))
         chosen = menu.exec(self.view.viewport().mapToGlobal(position))
         if chosen==open_action:
             QDesktopServices.openUrl(QUrl.fromLocalFile(row['path']))
@@ -1044,8 +1102,8 @@ class Window(QMainWindow):
         self.tree.setCurrentItem(item)
         path = item.data(0,Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
-        explore_action = menu.addAction('エクスプローラーで開く')
-        remove_action = menu.addAction('このフォルダ以下の登録を解除')
+        explore_action = menu.addAction(tr('エクスプローラーで開く'))
+        remove_action = menu.addAction(tr('このフォルダ以下の登録を解除'))
         chosen = menu.exec(self.tree.viewport().mapToGlobal(position))
         if chosen==explore_action:
             self.explore(path)
@@ -1055,22 +1113,22 @@ class Window(QMainWindow):
     def unregister_folder(self):
         folder = self.folder()
         if not folder:
-            QMessageBox.information(self,'登録解除','ツリーでフォルダを選択してください。')
+            QMessageBox.information(self,tr('登録解除'),tr('ツリーでフォルダを選択してください。'))
             return
-        answer = QMessageBox.question(self,'フォルダの登録解除',
-            f'{folder}\n\nこのフォルダ以下の登録・サムネイル・メタ情報・メモ・タグ・お気に入りをカタログから除去します。元ファイルは削除しません。',
+        answer = QMessageBox.question(self,tr('フォルダの登録解除'),
+            tr('{v0}\n\nこのフォルダ以下の登録・サムネイル・メタ情報・メモ・タグ・お気に入りをカタログから除去します。元ファイルは削除しません。',v0=folder),
             QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.Cancel,QMessageBox.StandardButton.Cancel)
         if answer==QMessageBox.StandardButton.Yes:
             count = self.db.remove_folder(folder)
             self.refresh()
-            self.statusBar().showMessage(f'{count}件の登録を解除しました。再登録するまでスキャン対象から外します。')
+            self.statusBar().showMessage(tr('{v0}件の登録を解除しました。再登録するまでスキャン対象から外します。',v0=count))
 
     def retry_timeouts(self):
         ids = [r['id'] for r in self.model.items if r['timed_out'] and not r['missing']]
         self.db.regenerate(ids)
         self.scan()
         self.schedule_refresh()
-        self.statusBar().showMessage(f'{len(ids)}件を再試行予約しました。自動生成ONで順次取得・生成します。')
+        self.statusBar().showMessage(tr('{v0}件を再試行予約しました。自動生成ONで順次取得・生成します。',v0=len(ids)))
 
     def open_local_copy(self,path):
         if self.exiting:
@@ -1079,7 +1137,7 @@ class Window(QMainWindow):
         if not within(path,preview_root):
             return
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
-            QMessageBox.warning(self,'開けません','作業用コピーを開く既定アプリを確認してください。')
+            QMessageBox.warning(self,tr('開けません'),tr('作業用コピーを開く既定アプリを確認してください。'))
 
     def show_window(self):
         self.showNormal()
@@ -1095,7 +1153,7 @@ class Window(QMainWindow):
                 return
             self.hide()
             event.ignore()
-            self.tray.showMessage('Media Catalog','トレイで監視を継続します。終了はトレイメニューから選択してください。')
+            self.tray.showMessage('Media Catalog',tr('トレイで監視を継続します。終了はトレイメニューから選択してください。'))
         else:
             event.ignore()
             self.quit_app()
@@ -1104,14 +1162,14 @@ class Window(QMainWindow):
         if self.exiting:
             return
         if getattr(self,'backup_running',False):
-            QMessageBox.information(self,'保存中','バックアップ完了後に終了してください。')
+            QMessageBox.information(self,tr('保存中'),tr('バックアップ完了後に終了してください。'))
             return
         for window in self.findChildren(DetailsWindow):
             if not window.close():
                 return
         self.exiting = True
         self.setEnabled(False)
-        self.statusBar().showMessage('終了処理中…')
+        self.statusBar().showMessage(tr('終了処理中…'))
         self.refresh_timer.stop()
         self.stats_timer.stop()
         self.service.stop()
@@ -1144,7 +1202,7 @@ def main():
     data.mkdir(parents=True,exist_ok=True)
     lock = QLockFile(str(data/'application.lock'))
     if not lock.tryLock(100):
-        QMessageBox.information(None,'Media Catalog','すでに起動しています。タスクトレイをご確認ください。')
+        QMessageBox.information(None,'Media Catalog',tr('すでに起動しています。タスクトレイをご確認ください。'))
         return 0
     db = Catalog(data/'catalog.sqlite3')
     window = Window(db)

@@ -1,139 +1,23 @@
 # Media Catalog
 
-画像・動画・複数ページTIFF・PowerPointをサムネイルで管理する、Windows向けのローカルカタログです。Python、PySide6、SQLiteで実装しています。
+[日本語](README.ja.md) · English
 
-## 使用方法
+A Windows app for browsing images, videos, TIFFs and PowerPoint files as a local thumbnail catalog.
 
-### 1. セットアップ
+## Get started
 
-1. ZIPをローカルの任意のフォルダへ展開します。
-2. **Python 3.12（64 bit）**をインストールします。WindowsのPythonランチャー `py` が必要です。
-3. `setup.bat` を実行します。
-4. 完了後、`start.bat` を実行します。
+1. Install **Python 3.12 (64-bit)** with the Windows Python launcher.
+2. Download and extract the app, then open the folder containing `app.py`.
+3. Run `setup.bat`, then `start.bat`.
+4. Select **Add folder** and choose the files you want to catalog.
 
-`setup.bat` は専用の `.venv` を作成し、PySide6、Pillow、pywin32をインストールします。
+Video thumbnails require **FFmpeg** on PATH. PowerPoint thumbnails require **Microsoft PowerPoint for Windows**.
 
-動画のサムネイル生成には別途 **FFmpeg** が必要です。`ffmpeg -version` を実行できるようPATHを設定してください。PowerPointのサムネイル生成には、Windows版Microsoft PowerPointが必要です。
+### Anaconda / Miniconda
 
-### 2. フォルダを登録する
+Use Anaconda Prompt in the app folder instead of `setup.bat`:
 
-1. 「フォルダ登録」を押します。
-2. 画像・動画・PowerPointが保存されているフォルダを選択します。
-3. メタデータの走査後、サムネイルが順次生成されます。
-
-複数フォルダを登録できます。登録済みフォルダを含む上位フォルダを後から登録した場合、下位の登録と既存データを上位へ統合します。
-
-**自動生成は初期状態でONです。** Box Driveの未キャッシュファイルは、サムネイル生成時に取得されます。ファイル本体を取得せず、パス・サイズ・更新日時だけを登録したい場合は、フォルダ登録前に「自動生成」をOFFにしてください。
-
-### 3. ファイルを見る・開く
-
-- 左側のフォルダツリーで表示範囲を選択します。
-- 「サブフォルダを含む」で、下位フォルダを含めるか切り替えます。
-- ファイルをダブルクリックすると、元ファイルを既定のアプリで開きます。
-- 右クリックから、元ファイルを開く、保存フォルダをエクスプローラーで開く、再生成する操作ができます。
-- サムネイルに約0.4秒マウスを置くと、長辺最大512pxのプレビューを表示します。
-- 複数ページのTIFFとPowerPointは、全ページを画面内に収まるタイル状のプレビューで表示します。
-
-一覧とホバープレビューはSQLiteに保存された画像を読み込みます。表示だけで元ファイルを取得することはありません。
-
-### 4. メモ・タグ・お気に入り
-
-ファイルを選択すると、右側の詳細パネルにメタ情報、メモ、タグ、お気に入りが表示されます。
-
-- タグはカンマ区切りで入力します。
-- 編集内容は、別ファイルの選択時、トレイ格納時、アプリ終了時、DBバックアップ前に保存されます。
-- 編集中は「未保存」、保存後は「保存済み」と表示されます。
-- 「詳細パネル」で表示・非表示を切り替えられます。
-- パネル間の境界をドラッグすると幅を変更できます。表示状態と幅は次回起動時も維持されます。
-
-ファイル名・メモ・タグを検索できます。「★ のみ」でお気に入り、「エラーのみ」で生成エラーとタイムアウトを絞り込めます。各条件は併用できます。
-
-### 5. スキャンと生成を管理する
-
-- 「今すぐスキャン」で登録フォルダを直ちに確認します。
-- 「選択を再生成」で選択ファイルのサムネイルを作り直します。
-- 「生成を一時停止」は新しい生成の開始を止めます。実行中の処理は完了またはタイムアウトまで継続します。
-- 一時停止中も、サイズと更新日時の定期スキャンは継続します。
-- 完了、未完了、タイムアウト、エラー、処理中の件数と経過時間を表示します。
-
-既定のスキャン間隔は10分、取得・生成タイムアウトは30分です。大容量ファイルでは60分などへ延長してから再試行できます。
-
-### 6. 削除候補を確認する
-
-正常に完了したスキャンで見つからなかったファイルは「削除候補」になります。この段階ではデータを保持します。
-
-1. 「削除候補のみ」をONにします。
-2. 対象を選択します。
-3. 「選択候補をカタログから削除」を押します。
-4. 確認画面でパスを確認します。
-
-承認後に削除されるのは、カタログ内の情報、サムネイル、メタ情報、メモ、タグ、お気に入りです。**元ファイルの削除・移動・変更は行いません。** アクセス拒否、接続断、スキャン中断時は、新たな削除候補の判定を保留します。
-
-### 7. DBをバックアップする
-
-「DBバックアップ」から、新しい `.sqlite3` ファイルとして保存します。アプリ稼働中でも整合性を保って保存できます。
-
-バックアップには設定、登録情報、サムネイル、ページ画像、メタ情報、メモ、タグ、お気に入りが含まれます。元ファイルは含みません。既存ファイルは上書きしません。
-
-復元用画面はまだありません。復元時はアプリを完全終了し、現在のデータフォルダを退避してから、バックアップを `catalog.sqlite3` という名前で配置してください。古い `-wal` や `-shm` ファイルと混在させないでください。
-
-### 8. 終了する
-
-閉じるボタンではタスクトレイへ格納します。完全に終了するには、トレイのMedia Catalogアイコンを右クリックし、「終了」を選びます。起動してもウィンドウが出ない場合は、タスクトレイを確認してください。
-
-## 対応形式
-
-| 種類 | 拡張子 | 表示内容 |
-|---|---|---|
-| 画像 | jpg, jpeg, png, bmp, gif, webp | 最初の画像またはフレーム |
-| TIFF | tif, tiff | 一覧は先頭ページ、ホバーは全ページ |
-| 動画 | mp4, mov, avi, mkv, wmv, m4v, webm, mpg, mpeg | 最初にデコードできるフレーム |
-| PowerPoint | ppt, pptx, pptm | 一覧は先頭スライド、ホバーは全スライド |
-
-保存サムネイルは長辺最大512px、JPEG品質85です。縦横比を維持し、小さい画像は拡大しません。EXIF回転を反映し、透明部分には白背景を使います。
-
-0バイトのPowerPointは「空ファイル」、スライド0枚は「スライドなし」として正常処理します。破損、パスワード保護、修復が必要なファイル、PowerPointやFFmpegの起動失敗は生成エラーとして表示します。
-
-## Box Driveとクラウドプレースホルダー
-
-定期スキャンでは `os.scandir()` と `DirEntry.stat(follow_symlinks=False)` を使い、パス、サイズ、最終更新日時だけを取得します。画像の読み込み、ハッシュ計算、動画解析、Office解析は行いません。
-
-本仕様は、これらのメタデータ取得ではBoxのファイル本体がダウンロードされないという前提に基づきます。Boxのバージョンや企業設定による違いを含め、実機での保証はしていません。
-
-サムネイル生成時は元ファイルを読み取り専用で作業領域へコピーし、そのコピーを画像ライブラリ、FFmpeg、PowerPointへ渡します。この時点で未キャッシュファイルの取得が発生します。作業コピーは処理後に削除します。
-
-別PCでの変更は、このPCのBox Driveへ反映された後のスキャンで検出されます。クラウドへ直接問い合わせる機能はありません。サイズと更新日時が同じ変更は自動検出できないため、必要に応じて手動再生成してください。
-
-## 元ファイルの保護
-
-Media Catalogが元ファイルを削除、移動、上書き、保存、属性変更する処理はありません。サムネイル生成時は読み取りだけを行います。
-
-「元ファイルを開く」またはダブルクリックでは、元のパスを既定の外部アプリへ渡します。外部アプリで編集・保存した場合、その変更は元ファイルへ反映されます。
-
-## 並列処理
-
-- フォルダ単位のメタデータ走査：最大4スレッド
-- サムネイルの取得・生成：最大3件並列
-- PowerPoint生成：同時1件
-- 一覧サムネイルのSQLite読み込み：バックグラウンド処理
-
-遅いプレースホルダーの取得中も、空きがあれば他の生成とスキャンを進めます。タイムアウトしたファイルは手動再試行まで保留します。通常の生成エラーは10分後に再試行します。
-
-## データの保存場所
-
-SQLiteデータベースと設定は、Qtの `AppLocalDataLocation` が指すローカル領域に保存されます。Windowsでは通常、次の場所です。
-
-```text
-%LOCALAPPDATA%\MediaCatalog\catalog.sqlite3
-```
-
-起動中は `catalog.sqlite3-wal` と `catalog.sqlite3-shm` が存在することがあります。稼働中にDBだけをコピーせず、アプリ内の「DBバックアップ」を使用してください。
-
-## Anaconda / Miniconda
-
-Anaconda Promptで展開先へ移動して実行します。この場合、`setup.bat` は使いません。
-
-```powershell
+```shell
 conda create -n media-catalog python=3.12
 conda activate media-catalog
 conda install -c conda-forge ffmpeg
@@ -141,59 +25,42 @@ python -m pip install -r requirements.txt
 python app.py
 ```
 
-## 手動セットアップ
+## Everyday use
 
-```powershell
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe app.py
-```
+| Action | How |
+|---|---|
+| Change language | Choose **日本語 / English** at the top. The setting is remembered. |
+| Browse a folder | Select it in the left tree; optionally include subfolders. |
+| Preview pages | Hover over a thumbnail. TIFF and PowerPoint pages appear together in a tiled preview. |
+| Open a file | Double-click it, or use the right-click menu. |
+| Find files | Search filenames, notes and tags; filter favorites, missing entries, errors or timeouts. |
+| Add notes and tags | Edit the right-hand panel. Separate tags with commas. |
+| Show or resize details | Toggle **Details**, or drag the panel divider. |
+| Pause generation | Select **Pause generation**. Active jobs finish; folder scans continue. |
+| Retry a file | Right-click and choose **Rescan / regenerate**. Auto-generation must be on and resumed. |
+| Back up | Select **Back up database** and save to a new file. |
+| Quit | Right-click the tray icon and select **Quit**. Closing the window normally hides it in the tray. |
 
-企業ネットワークでpipが制限されている場合は、社内で承認された配布元またはオフラインwheelを使ってください。
+Notes, tags and favorites are saved when you switch files, hide the app in the tray, quit, or start a backup. Language switching preserves unsaved edits.
 
-## Windowsサインイン時に起動する
+## Cloud folders and your files
 
-`Win + R` で `shell:startup` を開き、ショートカットを置きます。
+**Auto-generation is on by default.** Generating a thumbnail may download an uncached Box Drive file. Turn auto-generation off before adding a folder if you only want to list its files. Browsing saved thumbnails does not download the originals.
 
-- リンク先：`"展開先\.venv\Scripts\pythonw.exe" "展開先\app.py" --tray`
-- 作業フォルダー：展開先
-- アイコン：`展開先\assets\media_catalog.ico`
+Scans compare file size and modification time. This assumes your cloud client can provide that information without downloading file contents. Changes made on another PC are detected after they reach the local cloud client.
 
-本アプリはWindowsサービスではなく、サインイン中に動くタスクトレイアプリです。スリープ中は動作しません。
+The app does not modify or delete original files. Missing files are marked for review; removing catalog entries or unregistering a folder also removes their saved notes, tags and thumbnails. Opening an original in another app allows editing there.
 
-## 開発とテスト
+## Troubleshooting
 
-```powershell
-.venv\Scripts\python.exe -m unittest discover -s tests -v
-.venv\Scripts\python.exe tests\smoke_gui.py
-```
+- **FFmpeg not found:** activate the environment used to run the app, run `conda install -c conda-forge ffmpeg`, then restart and retry. For a separate installation, add FFmpeg to PATH or set `MEDIA_CATALOG_FFMPEG` to its executable.
+- **Large image:** the default limit is **300 megapixels per page**. Large images also need sufficient RAM. If necessary, set `MEDIA_CATALOG_MAX_IMAGE_MP` before launching; the value is in megapixels.
+- **Timeout:** the default is 30 minutes. Increase it for slow downloads, then retry the affected files.
+- **Backup:** use the app's backup command while it is running. Backups include the catalog and thumbnails, not original files. To restore, fully quit, set aside the current data folder, and place the backup there as `catalog.sqlite3`; do not reuse old `-wal` or `-shm` files.
+- **Data location:** a local per-user MediaCatalog folder under `%LOCALAPPDATA%`. Updating the app keeps the catalog.
 
-主要なテストでは、内容を読み取らない走査、削除候補、登録解除後のキャッシュ分離、DB更新、メモ・タグ・お気に入り、バックアップ、全ページホバー、タイムアウト、一時停止、正常終了を確認しています。
+Native Windows dialogs and messages from external applications may follow the OS language. Windows / Box Drive / PowerPoint behavior is not fully tested on the release build environment.
 
-Windows、Box Drive、実際のPowerPoint COMは、配布元環境では未検証です。最初は小規模フォルダで、生成、再スキャン、削除候補、再出現、トレイ終了を確認してください。
+## License
 
-## ファイル構成
-
-- `app.py`：画面、常駐処理、非同期サムネイル表示
-- `catalog.py`：SQLite、メタデータ走査、更新判定、削除候補
-- `thumbnail_worker.py`：画像、動画、PowerPointの分離生成プロセス
-- `assets/`：アプリケーションアイコン
-- `tests/`：単体テストとGUI回帰テスト
-
-## ライセンス
-
-本ソフトウェアは[MIT License](LICENSE)で公開します。依存ライブラリと外部ソフトウェアには、それぞれのライセンスが適用されます。
-
-## 主な変更履歴
-
-- **0.7.6**：READMEを公開用に再構成、MIT Licenseを追加
-- **0.7.5**：正方形に近いアプリアイコンへ更新
-- **0.7.4**：多数ページのホバー表示を安定化
-- **0.7.3**：メモ等の保存を切り替え・終了・トレイ格納・バックアップ前に実行
-- **0.7.2**：空のPowerPointを正常状態として処理
-- **0.7.1**：詳細パネル切り替え、エラー絞り込み、ホバーの画面内収容
-- **0.7.0**：全ページホバー、タグ、お気に入り、DBバックアップ、生成状況と一時停止
-- **0.6.0**：画像メタ情報とユーザーメモ
-- **0.5.0**：512pxサムネイルと全ページ保存
-- **0.3.1**：登録解除後のサムネイルキャッシュ混同を修正
-- **0.3.0**：タイムアウト、フォルダ統合・解除、ツリー表示
+[MIT License](LICENSE). External applications and dependencies retain their own licenses.
