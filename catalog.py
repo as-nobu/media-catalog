@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from itertools import islice
 from limits import MAX_PAGE_THUMBNAILS
+from search_query import compile_search
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif', '.webp'}
 VIDEO_EXT = {'.mp4', '.mov', '.avi', '.mkv', '.wmv', '.m4v', '.webm', '.mpg', '.mpeg'}
@@ -101,6 +102,7 @@ class Catalog:
     def connect(self):
         c = sqlite3.connect(self.path, timeout=15)
         c.row_factory = sqlite3.Row
+        c.create_function('casefold',1,lambda value:(value or '').casefold(),deterministic=True)
         c.execute('PRAGMA foreign_keys=ON')
         try:
             with c:
@@ -287,7 +289,7 @@ class Catalog:
                 paths.add(r[0])
         return sorted(paths)
 
-    def rows(self, folder=None, recursive=True, missing_only=False, search='', timeout_only=False, error_only=False):
+    def rows(self, folder=None, recursive=True, missing_only=False, search='', timeout_only=False, error_only=False, kind='', sort='name'):
         where, args = [], []
         if folder:
             folder = norm(folder)
@@ -306,9 +308,14 @@ class Catalog:
         if error_only:
             where.append("(error!='' OR timed_out=1)")
         if search:
-            where.append('(instr(lower(name),lower(?))>0 OR instr(lower(memo),lower(?))>0 OR instr(lower(tags),lower(?))>0)')
-            args.extend([search,search,search])
-        sql = 'SELECT * FROM files' + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY name COLLATE NOCASE,path'
+            clauses, values = compile_search(search)
+            where.extend(clauses)
+            args.extend(values)
+        if kind:
+            where.append('kind=?')
+            args.append(kind)
+        order = {'name':'name COLLATE NOCASE,path','newest':'mtime_ns DESC,name','oldest':'mtime_ns,name','largest':'size DESC,name'}.get(sort,'name COLLATE NOCASE,path')
+        sql = 'SELECT * FROM files' + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY '+order
         with self.connect() as c:
             return [dict(r) for r in c.execute(sql,args)]
 

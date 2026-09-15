@@ -51,6 +51,10 @@ Scans compare file size and modification time. This assumes your cloud client ca
 
 The app does not modify or delete original files. Missing files are marked for review; removing catalog entries or unregistering a folder also removes their saved notes, tags and thumbnails. Opening an original in another app allows editing there.
 
+## Search
+
+Search supports space-separated AND terms, `"phrases"`, and `-exclusions`. Scope terms with `name:`, `memo:`, `tag:`, `path:`, `meta:`, `ext:`, or `type:` (example: `cells tag:experiment -failed ext:tif`). Format and sorting controls sit beside search; generation options are under **Settings**. Press `Ctrl+F` to focus search.
+
 ## Troubleshooting
 
 - **SVG / Illustrator:** SVG and PDF-compatible AI are supported. AI previews use up to 20 saved PDF pages without launching Illustrator or opening linked assets. Legacy / non-PDF-compatible AI is unsupported. Missing content cannot be recovered. SVG with external references is skipped; embed images instead. Fonts and effects may differ from the authoring application.

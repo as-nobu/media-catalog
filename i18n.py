@@ -5,6 +5,12 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    '設定・管理': 'Settings', '検索ヘルプ': 'Search help', '絞り込み解除': 'Clear filters',
+    '検索：キーワード、tag:タグ、ext:tif、-除外': 'Search: keywords, tag:label, ext:tif, -exclude',
+    'すべての形式': 'All formats', '画像': 'Images', '動画': 'Videos',
+    '名前順': 'Name', '更新が新しい順': 'Newest first', '更新が古い順': 'Oldest first',
+    'サイズが大きい順': 'Largest first', '取得・生成タイムアウト': 'Download / generation timeout',
+    'スペース区切りはAND検索、"引用符"はフレーズ検索、-語句は除外です。\nname:名前 memo:メモ tag:タグ path:パス meta:メタ情報 ext:tif type:image\n例：細胞 tag:実験 -失敗 ext:tif\n検索は保存済みDBのみを参照します。Ctrl+Fで検索欄へ移動します。': 'Separate terms with spaces for AND; use "quotes" for phrases and -term to exclude.\nFields: name: memo: tag: path: meta: ext:tif type:image\nExample: cells tag:experiment -failed ext:tif\nSearch uses the saved catalog only. Ctrl+F focuses the search box.',
     'ベクター画像を描画できません。': 'Unable to render the vector image.',
     'SVGを読み込めません。': 'Unable to read the SVG.',
     'SVGのサイズが不正です。': 'Invalid SVG dimensions.',

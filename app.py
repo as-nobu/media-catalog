@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QTreeWidgetItemIterator, QDialog, QStyledItemDeleg
 from datetime import datetime
 from catalog import Catalog, norm, within
 from limits import MAX_PAGE_THUMBNAILS
+from theme import STYLE
 from i18n import set_language, get_language, tr, translate_message, static_source
 from qt_i18n import install_dialog_translator
 
@@ -678,17 +679,25 @@ class Window(QMainWindow):
         self.setWindowTitle('Media Catalog — 画像・動画・PowerPoint')
         self.setWindowIcon(QIcon(str(Path(__file__).with_name('assets')/'media_catalog.ico')))
         self.resize(1180,760)
+        self.setStyleSheet(STYLE)
         main = QWidget()
         self.setCentralWidget(main)
         layout = QVBoxLayout(main)
+        layout.setContentsMargins(16,16,16,8)
+        layout.setSpacing(10)
         bar = QHBoxLayout()
         layout.addLayout(bar)
         for text, callback in [('フォルダ登録',self.add_folder),('今すぐスキャン',self.scan),
-                               ('選択を再生成',self.regenerate),('DBバックアップ',self.backup_db),('選択候補をカタログから削除',self.remove_selected)]:
+                               ('選択を再生成',self.regenerate),('DBバックアップ',self.backup_db)]:
             button = QPushButton(text)
+            if text=='フォルダ登録':
+                button.setObjectName('primary')
             button.clicked.connect(callback)
             bar.addWidget(button)
         bar.addStretch()
+        options_button = QPushButton('設定・管理')
+        options_button.setCheckable(True)
+        bar.addWidget(options_button)
         self.language_label = QLabel('言語')
         bar.addWidget(self.language_label)
         self.language_combo = QComboBox()
@@ -699,8 +708,22 @@ class Window(QMainWindow):
         filters = QHBoxLayout()
         layout.addLayout(filters)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('ファイル名・メモ・タグで絞り込み')
+        self.search.setPlaceholderText('検索：キーワード、tag:タグ、ext:tif、-除外')
+        self.search.setClearButtonEnabled(True)
         filters.addWidget(self.search,1)
+        self.kind_filter = QComboBox()
+        self.sort_order = QComboBox()
+        for label,value in [('すべての形式',''),('画像','image'),('動画','video'),('PowerPoint','powerpoint'),('SVG','svg'),('Illustrator','illustrator')]:
+            self.kind_filter.addItem(label,value)
+        for label,value in [('名前順','name'),('更新が新しい順','newest'),('更新が古い順','oldest'),('サイズが大きい順','largest')]:
+            self.sort_order.addItem(label,value)
+        filters.addWidget(self.kind_filter)
+        filters.addWidget(self.sort_order)
+        help_button = QPushButton('検索ヘルプ')
+        help_button.clicked.connect(self.search_help)
+        filters.addWidget(help_button)
+        filters = QHBoxLayout()
+        layout.addLayout(filters)
         self.favorites = QCheckBox('★ のみ')
         filters.addWidget(self.favorites)
         self.recursive = QCheckBox('サブフォルダを含む')
@@ -712,24 +735,36 @@ class Window(QMainWindow):
         filters.addWidget(self.timeouts)
         self.errors = QCheckBox('エラーのみ')
         filters.addWidget(self.errors)
+        filters.addStretch()
+        clear_button = QPushButton('絞り込み解除')
+        clear_button.clicked.connect(self.clear_filters)
+        filters.addWidget(clear_button)
+        options = QWidget()
+        options_layout = QVBoxLayout(options)
+        options_layout.setContentsMargins(0,0,0,0)
+        layout.addWidget(options)
+        options.hide()
+        options_button.toggled.connect(options.setVisible)
+        filters = QHBoxLayout()
+        options_layout.addLayout(filters)
         self.generate = QCheckBox('自動生成（未キャッシュは取得）')
         self.generate.setChecked(db.get_setting('generate','1')=='1')
         filters.addWidget(self.generate)
         filters.addWidget(QLabel('スキャン間隔'))
         self.interval = QSpinBox()
+        self.interval.setMaximumWidth(130)
         self.interval.setRange(1,1440)
         self.interval.setSuffix(' 分')
         self.interval.setValue(int(db.get_setting('interval',600))//60)
         filters.addWidget(self.interval)
         settings = QHBoxLayout()
-        layout.addLayout(settings)
-        settings.addWidget(QLabel('取得・生成タイムアウト（新しい処理から適用）'))
+        options_layout.addLayout(settings)
+        settings.addWidget(QLabel('取得・生成タイムアウト'))
         self.timeout = QSpinBox()
         self.timeout.setRange(1,1440)
         self.timeout.setSuffix(' 分')
         self.timeout.setValue(int(db.get_setting('timeout',1800))//60)
         settings.addWidget(self.timeout)
-        settings.addWidget(QLabel('スキャン4スレッド / 生成最大3件'))
         for text, callback in [('表示中のタイムアウトを再試行',self.retry_timeouts),('選択フォルダの登録解除',self.unregister_folder)]:
             button = QPushButton(text)
             button.clicked.connect(callback)
@@ -737,9 +772,13 @@ class Window(QMainWindow):
         self.pause_button = QPushButton('生成を一時停止')
         self.pause_button.setCheckable(True)
         self.pause_button.toggled.connect(self.pause_generation)
-        settings.addWidget(self.pause_button)
+        bar.insertWidget(4,self.pause_button)
+        remove_button = QPushButton('選択候補をカタログから削除')
+        remove_button.clicked.connect(self.remove_selected)
+        filters.addWidget(remove_button)
         settings.addStretch()
         self.progress_label = QLabel('生成状況を確認中…')
+        self.progress_label.setObjectName('progress')
         self.progress_label.setWordWrap(True)
         layout.addWidget(self.progress_label)
         self.active_jobs = []
@@ -802,6 +841,12 @@ class Window(QMainWindow):
         self.details.saved.connect(self.schedule_refresh)
         self.favorites.toggled.connect(self.schedule_refresh)
         self.search.textChanged.connect(self.schedule_refresh)
+        self.kind_filter.currentIndexChanged.connect(self.schedule_refresh)
+        self.sort_order.currentIndexChanged.connect(self.schedule_refresh)
+        shortcut = QAction(self)
+        shortcut.setShortcut('Ctrl+F')
+        shortcut.triggered.connect(self.search.setFocus)
+        self.addAction(shortcut)
         self.recursive.toggled.connect(self.schedule_refresh)
         self.missing.toggled.connect(self.schedule_refresh)
         self.timeouts.toggled.connect(self.schedule_refresh)
@@ -832,6 +877,16 @@ class Window(QMainWindow):
         self.refresh()
         self.service.start()
 
+    def clear_filters(self):
+        self.search.clear()
+        self.kind_filter.setCurrentIndex(0)
+        for checkbox in (self.favorites,self.missing,self.timeouts,self.errors):
+            checkbox.setChecked(False)
+        self.schedule_refresh()
+
+    def search_help(self):
+        QMessageBox.information(self,tr('検索ヘルプ'),tr('スペース区切りはAND検索、"引用符"はフレーズ検索、-語句は除外です。\nname:名前 memo:メモ tag:タグ path:パス meta:メタ情報 ext:tif type:image\n例：細胞 tag:実験 -失敗 ext:tif\n検索は保存済みDBのみを参照します。Ctrl+Fで検索欄へ移動します。'))
+
     def schedule_refresh(self,*args):
         # Throttle, rather than restart, to avoid starving updates during generation.
         if not self.refresh_timer.isActive():
@@ -858,6 +913,13 @@ class Window(QMainWindow):
         for action in self.findChildren(QAction):
             self._translate_property(action,'i18nText',action.text,action.setText)
         self.tree.setHeaderLabel(tr('登録フォルダ'))
+        for combo in (self.kind_filter,self.sort_order):
+            for index in range(combo.count()):
+                source = combo.itemData(index,Qt.ItemDataRole.UserRole+1)
+                if source is None:
+                    source = combo.itemText(index)
+                    combo.setItemData(index,source,Qt.ItemDataRole.UserRole+1)
+                combo.setItemText(index,tr(source))
         if self.details.uid:
             self.details.reload_info()
             self.details.status.setText(tr(static_source(self.details.status.text())))
@@ -941,7 +1003,7 @@ class Window(QMainWindow):
                 item.setExpanded(path in expanded or any(path==r['path'] for r in roots))
             self.tree.blockSignals(False)
             folder = self.folder()
-        rows = self.db.rows(folder,self.recursive.isChecked(),self.missing.isChecked(),self.search.text(),self.timeouts.isChecked(),self.errors.isChecked())
+        rows = self.db.rows(folder,self.recursive.isChecked(),self.missing.isChecked(),self.search.text(),self.timeouts.isChecked(),self.errors.isChecked(),kind=self.kind_filter.currentData(),sort=self.sort_order.currentData())
         if self.favorites.isChecked():
             rows = [r for r in rows if r['favorite']]
         self.view.selectionModel().blockSignals(True)
