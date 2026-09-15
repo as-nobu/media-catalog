@@ -5,6 +5,17 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    'ベクター画像を描画できません。': 'Unable to render the vector image.',
+    'SVGを読み込めません。': 'Unable to read the SVG.',
+    'SVGのサイズが不正です。': 'Invalid SVG dimensions.',
+    '外部リンクを含むSVGは自動生成できません。画像を埋め込んで保存してください。': 'SVG with external references is not rendered automatically. Save with images embedded.',
+    'PDF互換でないAIファイルには対応していません。IllustratorでPDF互換を有効にして別途保存してください。': 'AI without PDF compatibility is unsupported. Save a separate PDF-compatible copy in Illustrator.',
+    'パスワード付きAIのため、自動生成をスキップしました。': 'Thumbnail generation skipped: password-protected AI.',
+    'AIのPDF互換データを読み込めません。': 'Unable to read the PDF-compatible data in this AI file.',
+    'サムネイルは先頭20ページまで表示します。': 'Thumbnails show the first 20 pages only.',
+    'PPTの事前検査に必要なライブラリがありません。pip install -r requirements.txt を実行してください。': 'PowerPoint preflight dependency missing. Run pip install -r requirements.txt.',
+    'PPTの暗号化状態を判定できないため、自動生成をスキップしました。': 'Thumbnail generation skipped: unable to determine PowerPoint encryption status.',
+    'パスワード付きPPTのため、自動生成をスキップしました。': 'Thumbnail generation skipped: password-protected PowerPoint file.',
     'FFmpegが見つかりません。使用中のConda環境で conda install -c conda-forge ffmpeg を実行し、アプリを再起動してください。': 'FFmpeg was not found. Run conda install -c conda-forge ffmpeg in the active Conda environment, then restart the app.',
     '画像の画素数が設定上限を超えています。必要なら MEDIA_CATALOG_MAX_IMAGE_MP を増やしてください（既定300MP）。': 'The image exceeds the pixel limit. Increase MEDIA_CATALOG_MAX_IMAGE_MP if needed (default: 300 MP).',
     '画像の展開に必要なメモリが不足しています。他のアプリを閉じて再試行してください。': 'Not enough memory to decode this image. Close other applications and retry.',

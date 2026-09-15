@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
 from PySide6.QtWidgets import QTreeWidgetItemIterator, QDialog, QStyledItemDelegate, QPlainTextEdit
 from datetime import datetime
 from catalog import Catalog, norm, within
+from limits import MAX_PAGE_THUMBNAILS
 from i18n import set_language, get_language, tr, translate_message, static_source
 from qt_i18n import install_dialog_translator
 
@@ -159,7 +160,7 @@ class Service(QThread):
                             raise ValueError('ページ数が不正です。')
                         folder = Path(str(out)+'.pages')
                         self.db.save_thumb(job,out.read_bytes() if count else None,
-                            pages=((folder/f'{i}.jpg').read_bytes() for i in range(1,count+1)),page_count=count,
+                            pages=((folder/f'{i}.jpg').read_bytes() for i in range(1,min(count,MAX_PAGE_THUMBNAILS)+1)),page_count=count,
                             metadata=manifest.get('metadata'))
                 else:
                     self.request_scan()
@@ -411,7 +412,7 @@ class HoverListView(QListView):
     def build_tiles(self,request,row):
         key,width,height = request
         try:
-            count = row['page_count']
+            count = min(row['page_count'],MAX_PAGE_THUMBNAILS)
             columns = max(range(1,count+1),key=lambda c:min(width/c,(height/math.ceil(count/c))-22))
             # Bound every cell, including labels, so large documents never clip pages.
             cellw = max(1,int(width/columns))
@@ -520,7 +521,7 @@ class PagesWindow(QDialog):
         if self.signature!=signature:
             self.signature = signature
             self.view.clear_hover()
-            self.model.reset([dict(row,page_number=i) for i in range(1,row['page_count']+1)])
+            self.model.reset([dict(row,page_number=i) for i in range(1,min(row['page_count'],MAX_PAGE_THUMBNAILS)+1)])
         pending = row['thumb_size'] is None or row['thumb_size']!=row['size'] or row['thumb_mtime']!=row['mtime_ns']
         note = tr(' / 更新待ち（保存済みの画像を表示）') if pending else ''
         if row['timed_out']:
@@ -618,6 +619,8 @@ class DetailsWindow(QWidget):
         lines = [row['path'], tr('種類: {v0}',v0=row['kind']), tr('サイズ: {v0:,} bytes',v0=row['size']),
                  tr('更新日時: ')+datetime.fromtimestamp(row['mtime_ns']/1e9).isoformat(' ',timespec='seconds'),
                  tr('ページ数: {v0}',v0=row['page_count']), tr('エラー: ')+(translate_message(row['error']) if row['error'] else tr('なし'))]
+        if row['page_count']>MAX_PAGE_THUMBNAILS:
+            lines.append(tr('サムネイルは先頭20ページまで表示します。'))
         if row['missing']:
             lines.append(tr('状態: 削除候補'))
         if row['thumb_size'] != row['size'] or row['thumb_mtime'] != row['mtime_ns']:

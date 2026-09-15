@@ -8,6 +8,8 @@ import json
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
+from itertools import islice
+from limits import MAX_PAGE_THUMBNAILS
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif', '.webp'}
 VIDEO_EXT = {'.mp4', '.mov', '.avi', '.mkv', '.wmv', '.m4v', '.webm', '.mpg', '.mpeg'}
@@ -16,7 +18,7 @@ POWERPOINT_EXT = {'.ppt', '.pptx', '.pptm'}
 
 def kind_for(name):
     ext = Path(name).suffix.lower()
-    return 'image' if ext in IMAGE_EXT else 'video' if ext in VIDEO_EXT else 'powerpoint' if ext in POWERPOINT_EXT else None
+    return 'svg' if ext=='.svg' else 'illustrator' if ext=='.ai' else 'image' if ext in IMAGE_EXT else 'video' if ext in VIDEO_EXT else 'powerpoint' if ext in POWERPOINT_EXT else None
 
 
 def norm(path):
@@ -79,6 +81,9 @@ class Catalog:
                 file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
                 page_number INTEGER NOT NULL, data BLOB NOT NULL,
                 PRIMARY KEY(file_id,page_number))''')
+            if not c.execute("SELECT 1 FROM settings WHERE key='page_limit_20_v1'").fetchone():
+                c.execute('DELETE FROM page_thumbs WHERE page_number>?',(MAX_PAGE_THUMBNAILS,))
+                c.execute("INSERT INTO settings VALUES ('page_limit_20_v1','1')")
             if not c.execute("SELECT 1 FROM settings WHERE key='four_page_thumbnail_v1'").fetchone():
                 # Keep old thumbnails visible until replacement succeeds; respect timeout holds.
                 c.execute("""UPDATE files SET thumb_size=NULL,thumb_mtime=NULL
@@ -399,9 +404,9 @@ class Catalog:
                     c.execute('DELETE FROM thumbs WHERE file_id=?',(job['id'],))
                 c.execute('DELETE FROM page_thumbs WHERE file_id=?',(job['id'],))
                 actual = 0
-                for actual,blob in enumerate(pages if pages is not None else [data],1):
+                for actual,blob in enumerate(islice(pages if pages is not None else [data],MAX_PAGE_THUMBNAILS),1):
                     c.execute('INSERT INTO page_thumbs VALUES (?,?,?)',(job['id'],actual,blob))
-                if actual!=page_count:
+                if actual!=min(page_count,MAX_PAGE_THUMBNAILS):
                     raise ValueError('ページ数が一致しません。')
                 return True
         return False

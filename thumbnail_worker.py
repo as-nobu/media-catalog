@@ -8,6 +8,8 @@ import shutil
 import json
 import sys
 import warnings
+from itertools import islice
+from limits import MAX_PAGE_THUMBNAILS
 from PIL import Image, ImageOps, ExifTags
 
 
@@ -79,6 +81,21 @@ def copy_source(source, output):
 
 
 def fit_page(image, size):
+    # Scientific TIFFs use integer/float modes unsupported by LANCZOS in
+    # some Pillow versions. Preserve dynamic range until the small preview.
+    if image.mode.startswith('I') or image.mode == 'F':
+        import numpy as np
+        page = image.convert('F')
+        page.thumbnail(size,Image.Resampling.LANCZOS)
+        page = ImageOps.exif_transpose(page)
+        values = np.asarray(page).copy()
+        finite = np.isfinite(values)
+        preview = np.zeros(values.shape,dtype=np.uint8)
+        if finite.any():
+            low, high = float(values[finite].min()), float(values[finite].max())
+            if high > low:
+                preview[finite] = np.clip((values[finite].astype(np.float64)-low)*255/(high-low),0,255).astype(np.uint8)
+        return Image.fromarray(preview).convert('RGB')
     # Shrink before the EXIF copy/rotation to avoid another full-resolution buffer.
     image.thumbnail(size,Image.Resampling.LANCZOS)
     page = ImageOps.exif_transpose(image)
@@ -88,10 +105,25 @@ def fit_page(image, size):
     return rgb
 
 
+def check_powerpoint(source):
+    """Fail closed before COM: a modal password prompt cannot be timed out safely."""
+    try:
+        import msoffcrypto
+    except ImportError as exc:
+        raise RuntimeError('PPTの事前検査に必要なライブラリがありません。pip install -r requirements.txt を実行してください。') from exc
+    try:
+        with open(source,'rb') as stream:
+            encrypted = msoffcrypto.OfficeFile(stream).is_encrypted()
+    except Exception as exc:
+        raise RuntimeError('PPTの暗号化状態を判定できないため、自動生成をスキップしました。') from exc
+    if encrypted:
+        raise RuntimeError('パスワード付きPPTのため、自動生成をスキップしました。')
+
+
 def read_pages(path):
     with Image.open(path) as im:
         limit = im.n_frames if im.format=='TIFF' else 1
-        for i in range(limit):
+        for i in range(min(limit,MAX_PAGE_THUMBNAILS)):
             im.seek(i)
             yield fit_page(im,(512,512))
 
@@ -102,23 +134,23 @@ def export_slides(presentation, temp):
         raise RuntimeError('スライドがありません。')
     width, height = presentation.PageSetup.SlideWidth, presentation.PageSetup.SlideHeight
     scale = 512/max(width,height)
-    for i in range(1,count+1):
+    for i in range(1,min(count,MAX_PAGE_THUMBNAILS)+1):
         path = str(Path(temp)/f'slide-{i}.png')
         presentation.Slides(i).Export(path,'PNG',max(1,round(width*scale)),max(1,round(height*scale)))
         yield path
 
 
-def save_pages(pages,output,metadata=None):
+def save_pages(pages,output,metadata=None,total_pages=None):
     folder = Path(str(output)+'.pages')
     folder.mkdir(exist_ok=True)
     count = 0
-    for count,page in enumerate(pages,1):
+    for count,page in enumerate(islice(pages,MAX_PAGE_THUMBNAILS),1):
         page.save(folder/f'{count}.jpg','JPEG',quality=85)
         if count==1:
             page.save(output,'JPEG',quality=85)
     if not count:
         raise ValueError('表示できるページがありません。')
-    Path(str(output)+'.json').write_text(json.dumps({'page_count':count,'metadata':metadata},ensure_ascii=False),encoding='utf-8')
+    Path(str(output)+'.json').write_text(json.dumps({'page_count':total_pages if total_pages is not None else count,'thumbnail_count':count,'metadata':metadata},ensure_ascii=False),encoding='utf-8')
 
 
 def generate(source, kind, output):
@@ -138,6 +170,14 @@ def generate(source, kind, output):
         # All decoders / Office see only the private local copy.
         source = staged
         metadata = None
+        if kind=='svg':
+            from vector_preview import svg_page
+            save_pages([svg_page(source)],output,metadata={'形式':'SVG'})
+            return
+        if kind=='illustrator':
+            from vector_preview import save_illustrator
+            save_illustrator(source,output,save_pages)
+            return
         if kind == 'image':
             metadata = image_metadata(source)
             pages = read_pages(source)
@@ -150,6 +190,7 @@ def generate(source, kind, output):
                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             pages = read_pages(image_path)
         else:
+            check_powerpoint(source)
             if os.name != 'nt':
                 raise RuntimeError('PowerPoint生成にはWindowsとMicrosoft PowerPointが必要です。')
             import pythoncom
@@ -164,7 +205,7 @@ def generate(source, kind, output):
                     save_empty(output,'スライドなし')
                     return
                 pages = (next(read_pages(path)) for path in export_slides(presentation,temp))
-                save_pages(pages,output)
+                save_pages(pages,output,total_pages=presentation.Slides.Count)
             finally:
                 try:
                     if presentation is not None:
@@ -176,7 +217,8 @@ def generate(source, kind, output):
                         app.Quit()
                     pythoncom.CoUninitialize()
             return
-        save_pages(pages,output,metadata)
+        total = metadata['フレーム数'] if kind=='image' and metadata['形式']=='TIFF' else None
+        save_pages(pages,output,metadata,total_pages=total)
 
 
 def save_empty(output,reason):

@@ -2,7 +2,7 @@
 
 [日本語](README.ja.md) · English
 
-A Windows app for browsing images, videos, TIFFs and PowerPoint files as a local thumbnail catalog.
+A Windows app for browsing images, videos, TIFFs, PowerPoint, SVG and PDF-compatible Illustrator files as a local thumbnail catalog.
 
 ## Get started
 
@@ -31,7 +31,7 @@ python app.py
 |---|---|
 | Change language | Choose **日本語 / English** at the top. The setting is remembered. |
 | Browse a folder | Select it in the left tree; optionally include subfolders. |
-| Preview pages | Hover over a thumbnail. TIFF and PowerPoint pages appear together in a tiled preview. |
+| Preview pages | Hover over a thumbnail. The first 20 TIFF / PowerPoint pages are generated, cached and tiled. The total page count is retained. |
 | Open a file | Double-click it, or use the right-click menu. |
 | Find files | Search filenames, notes and tags; filter favorites, missing entries, errors or timeouts. |
 | Add notes and tags | Edit the right-hand panel. Separate tags with commas. |
@@ -53,6 +53,9 @@ The app does not modify or delete original files. Missing files are marked for r
 
 ## Troubleshooting
 
+- **SVG / Illustrator:** SVG and PDF-compatible AI are supported. AI previews use up to 20 saved PDF pages without launching Illustrator or opening linked assets. Legacy / non-PDF-compatible AI is unsupported. Missing content cannot be recovered. SVG with external references is skipped; embed images instead. Fonts and effects may differ from the authoring application.
+- **Microscope TIFF:** integer and floating-point grayscale images use per-page brightness normalization for previews, not quantitative measurement. Original data is unchanged.
+- **Password-protected PowerPoint:** generation is skipped with an explanation in the error field. Files whose encryption status cannot be determined are also skipped. Run `pip install -r requirements.txt` after updating the app.
 - **FFmpeg not found:** activate the environment used to run the app, run `conda install -c conda-forge ffmpeg`, then restart and retry. For a separate installation, add FFmpeg to PATH or set `MEDIA_CATALOG_FFMPEG` to its executable.
 - **Large image:** the default limit is **300 megapixels per page**. Large images also need sufficient RAM. If necessary, set `MEDIA_CATALOG_MAX_IMAGE_MP` before launching; the value is in megapixels.
 - **Timeout:** the default is 30 minutes. Increase it for slow downloads, then retry the affected files.
