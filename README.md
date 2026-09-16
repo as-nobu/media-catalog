@@ -51,7 +51,9 @@ Scans compare file size and modification time. This assumes your cloud client ca
 
 The app does not modify or delete original files. Missing files are marked for review; removing catalog entries or unregistering a folder also removes their saved notes, tags and thumbnails. Opening an original in another app allows editing there.
 
-## Search
+## Import and search
+
+To transfer notes and tags, open **Settings → Import notes and tags** and choose a database saved with **Back up database** on the other PC. Map source/local folders if paths differ, then preview changes. Tags are combined without duplicates; conflicting notes have a per-file choice. Before applying, a database backup is saved under `backups` in the data folder. Original files, the source database, favorites and thumbnails are unchanged.
 
 Search supports space-separated AND terms, `"phrases"`, and `-exclusions`. Scope terms with `name:`, `memo:`, `tag:`, `path:`, `meta:`, `ext:`, or `type:` (example: `cells tag:experiment -failed ext:tif`). Format and sorting controls sit beside search; generation options are under **Settings**. Press `Ctrl+F` to focus search.
 
@@ -59,7 +61,7 @@ Search supports space-separated AND terms, `"phrases"`, and `-exclusions`. Scope
 
 - **SVG / Illustrator:** SVG and PDF-compatible AI are supported. AI previews use up to 20 saved PDF pages without launching Illustrator or opening linked assets. Legacy / non-PDF-compatible AI is unsupported. Missing content cannot be recovered. SVG with external references is skipped; embed images instead. Fonts and effects may differ from the authoring application.
 - **Microscope TIFF:** integer and floating-point grayscale images use per-page brightness normalization for previews, not quantitative measurement. Original data is unchanged.
-- **Password-protected PowerPoint:** generation is skipped with an explanation in the error field. Files whose encryption status cannot be determined are also skipped. Run `pip install -r requirements.txt` after updating the app.
+- **Password-protected PowerPoint:** confirmed encryption is skipped. Unknown encryption status proceeds to generation; a password dialog may appear. Zero-byte images and presentations are cataloged as empty files without an error.
 - **FFmpeg not found:** activate the environment used to run the app, run `conda install -c conda-forge ffmpeg`, then restart and retry. For a separate installation, add FFmpeg to PATH or set `MEDIA_CATALOG_FFMPEG` to its executable.
 - **Large image:** the default limit is **300 megapixels per page**. Large images also need sufficient RAM. If necessary, set `MEDIA_CATALOG_MAX_IMAGE_MP` before launching; the value is in megapixels.
 - **Timeout:** the default is 30 minutes. Increase it for slow downloads, then retry the affected files.

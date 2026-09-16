@@ -5,6 +5,22 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    'バックアップ・マージ処理中…': 'Backing up and merging…',
+    'メモ・タグの取り込み': 'Import notes and tags',
+    '取り込み元DBの形式が不正です。': 'Unsupported source database format.',
+    '対応元と対応先のフォルダを両方指定してください。': 'Specify both source and destination folders.',
+    '確認後にデータが変更されました。取り込みをやり直してください。': 'Data changed after preview. Preview and import again.',
+    '空欄は絶対パスで照合。別PCのDBは対応するフォルダを指定してください。': 'Leave folders blank to match absolute paths. For another PC, map the corresponding folders.',
+    '取り込み元フォルダ': 'Source folder', '現在のフォルダ': 'Local folder',
+    '差分を確認': 'Preview changes', 'ファイル': 'File', 'タグ（マージ後）': 'Merged tags',
+    'メモの扱い': 'Note handling', '現在のメモ': 'Current note', '取り込み元のメモ': 'Imported note',
+    'タグは和集合。空欄で既存メモを消しません。適用前に自動バックアップします。': 'Tags are combined. Empty notes never erase existing notes. A backup is created before applying changes.',
+    'マージを適用': 'Apply merge', '閉じる': 'Close', '取り込み失敗': 'Import failed',
+    '現在を保持': 'Keep current', '取り込み元を採用': 'Use imported', '両方を残す': 'Keep both',
+    '空欄へ取り込み': 'Fill empty note', '変更なし': 'No change', '取り込み完了': 'Import complete',
+    '照合: {v0}件 / メモ競合: {v1}件 / 対応なし・重複等: {v2}件': 'Matched: {v0} / Note conflicts: {v1} / Unmatched or ambiguous: {v2}',
+    '更新: {v0}件\nバックアップ: {v1}': 'Updated: {v0}\nBackup: {v1}',
+    '［空ファイル］': '[Empty file] ',
     '設定・管理': 'Settings', '検索ヘルプ': 'Search help', '絞り込み解除': 'Clear filters',
     '検索：キーワード、tag:タグ、ext:tif、-除外': 'Search: keywords, tag:label, ext:tif, -exclude',
     'すべての形式': 'All formats', '画像': 'Images', '動画': 'Videos',

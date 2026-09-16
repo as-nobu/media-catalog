@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
 from PySide6.QtWidgets import QTreeWidgetItemIterator, QDialog, QStyledItemDelegate, QPlainTextEdit
 from datetime import datetime
 from catalog import Catalog, norm, within
-from limits import MAX_PAGE_THUMBNAILS
+from limits import MAX_PAGE_THUMBNAILS, EMPTY_FILE_KINDS
 from theme import STYLE
 from i18n import set_language, get_language, tr, translate_message, static_source
 from qt_i18n import install_dialog_translator
@@ -124,7 +124,7 @@ class Service(QThread):
             if (st.st_size,st.st_mtime_ns) != (job['size'],job['mtime_ns']):
                 self.request_scan()
                 return
-            if job['kind']=='powerpoint' and job['size']==0 and not job.get('open_copy'):
+            if job['kind'] in EMPTY_FILE_KINDS and job['size']==0 and not job.get('open_copy'):
                 self.db.save_thumb(job,None,pages=[],page_count=0,metadata={'状態':'空ファイル（0 bytes）'})
                 return
             work = Path(self.db.path).parent/'work'
@@ -157,7 +157,7 @@ class Service(QThread):
                     else:
                         manifest = json.loads(Path(str(out)+'.json').read_text(encoding='utf-8'))
                         count = manifest['page_count']
-                        if not isinstance(count,int) or count<0 or (count==0 and job['kind']!='powerpoint'):
+                        if not isinstance(count,int) or count<0 or (count==0 and not (job['kind']=='powerpoint' or (job['kind'] in EMPTY_FILE_KINDS and job['size']==0))):
                             raise ValueError('ページ数が不正です。')
                         folder = Path(str(out)+'.pages')
                         self.db.save_thumb(job,out.read_bytes() if count else None,
@@ -240,7 +240,7 @@ class ThumbnailModel(QAbstractListModel):
             mark = tr('［削除候補］') if row['missing'] else tr('［タイムアウト］') if row['timed_out'] else tr('［生成エラー］') if row['error'] else ''
             pages = tr('［{v0}ページ］',v0=row['page_count']) if row.get('page_count',1)>1 else ''
             if row.get('page_count')==0:
-                pages = tr('［空のPPT］')
+                pages = tr('［空ファイル］') if row['size']==0 else tr('［空のPPT］')
             return ('★ ' if row.get('favorite') else '')+mark+pages+row['name']
         if role == Qt.ItemDataRole.ToolTipRole:
             return row['path']+f"\n{row['size']:,} bytes"+ ('\n'+row['error'] if row['error'] else '')
@@ -776,6 +776,9 @@ class Window(QMainWindow):
         remove_button = QPushButton('選択候補をカタログから削除')
         remove_button.clicked.connect(self.remove_selected)
         filters.addWidget(remove_button)
+        import_button = QPushButton('メモ・タグの取り込み')
+        import_button.clicked.connect(self.import_annotations)
+        filters.addWidget(import_button)
         settings.addStretch()
         self.progress_label = QLabel('生成状況を確認中…')
         self.progress_label.setObjectName('progress')
@@ -1109,6 +1112,22 @@ class Window(QMainWindow):
         self.progress_label.setText(tr('{v0} | 完了 {v1} / 全体 {v2} | 未完了 {v3} | タイムアウト {v4} | エラー {v5} | 処理中 {v6}\n',
             v0=state,v1=counts['complete'],v2=counts['total'],v3=counts['pending'],v4=counts['timeout'],v5=counts['errors'],v6=len(self.active_jobs))+
             ' / '.join(tr('{v0} ({v1}秒)',v0=name,v1=seconds) for name,seconds in self.active_jobs))
+
+    def import_annotations(self):
+        if self.details.dirty() and not self.details.save():
+            return
+        path,_=QFileDialog.getOpenFileName(self,tr('メモ・タグの取り込み'),'', 'SQLite (*.sqlite3 *.sqlite *.db);;All files (*)')
+        if not path:
+            return
+        try:
+            from import_dialog import ImportDialog
+            dialog=ImportDialog(self.db,path,self)
+            if dialog.exec()==QDialog.DialogCode.Accepted:
+                if self.details.uid:
+                    self.details.set_row(self.db.file_record(self.details.uid))
+                self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self,tr('取り込み失敗'),translate_message(str(exc)))
 
     def backup_db(self):
         if getattr(self,'backup_running',False):

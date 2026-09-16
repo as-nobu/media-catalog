@@ -9,7 +9,7 @@ import json
 import sys
 import warnings
 from itertools import islice
-from limits import MAX_PAGE_THUMBNAILS
+from limits import MAX_PAGE_THUMBNAILS, EMPTY_FILE_KINDS
 from PIL import Image, ImageOps, ExifTags
 
 
@@ -106,7 +106,7 @@ def fit_page(image, size):
 
 
 def check_powerpoint(source):
-    """Fail closed before COM: a modal password prompt cannot be timed out safely."""
+    """Reject confirmed encryption; unknown formats may be tried by PowerPoint."""
     try:
         import msoffcrypto
     except ImportError as exc:
@@ -114,10 +114,11 @@ def check_powerpoint(source):
     try:
         with open(source,'rb') as stream:
             encrypted = msoffcrypto.OfficeFile(stream).is_encrypted()
-    except Exception as exc:
-        raise RuntimeError('PPTの暗号化状態を判定できないため、自動生成をスキップしました。') from exc
+    except Exception:
+        return None
     if encrypted:
         raise RuntimeError('パスワード付きPPTのため、自動生成をスキップしました。')
+    return False
 
 
 def read_pages(path):
@@ -160,7 +161,7 @@ def generate(source, kind, output):
     if kind == 'copy':
         copy_source(source,output)
         return
-    if kind == 'powerpoint' and os.stat(source).st_size == 0:
+    if kind in EMPTY_FILE_KINDS and os.stat(source).st_size == 0:
         save_empty(output,'空ファイル（0 bytes）')
         return
     ffmpeg = find_ffmpeg() if kind == 'video' else None

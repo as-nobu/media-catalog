@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from itertools import islice
-from limits import MAX_PAGE_THUMBNAILS
+from limits import MAX_PAGE_THUMBNAILS, EMPTY_FILE_KINDS
 from search_query import compile_search
 
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp', '.gif', '.webp'}
@@ -97,6 +97,11 @@ class Catalog:
                 c.execute("""UPDATE files SET retry_at=0,timed_out=0,thumb_size=NULL,error=''
                     WHERE kind='powerpoint' AND (size=0 OR instr(error,'スライドがありません')>0)""")
                 c.execute("INSERT INTO settings VALUES ('empty_ppt_v1','1')")
+            if not c.execute("SELECT 1 FROM settings WHERE key='empty_images_unknown_ppt_v1'").fetchone():
+                c.execute("""UPDATE files SET retry_at=0,timed_out=0,thumb_size=NULL,error=''
+                    WHERE (size=0 AND kind IN ('image','svg','illustrator'))
+                    OR (kind='powerpoint' AND instr(error,'PPTの暗号化状態を判定できない')>0)""")
+                c.execute("INSERT INTO settings VALUES ('empty_images_unknown_ppt_v1','1')")
 
     @contextmanager
     def connect(self):
@@ -396,7 +401,7 @@ class Catalog:
                 FROM files WHERE missing=0''').fetchone())
 
     def save_thumb(self, job, data, pages=None, page_count=1, metadata=None):
-        if page_count<0 or (page_count==0 and (job['kind']!='powerpoint' or data is not None)):
+        if page_count<0 or (page_count==0 and (data is not None or not (job['kind']=='powerpoint' or (job['kind'] in EMPTY_FILE_KINDS and job['size']==0)))):
             raise ValueError('ページ数が不正です。')
         with self.connect() as c:
             result = c.execute('''UPDATE files SET thumb_size=?,thumb_mtime=?,page_count=?,revision=revision+1,error='',retry_at=0,timed_out=0

@@ -56,8 +56,7 @@ class ScientificAndPasswordTests(unittest.TestCase):
                 generate(str(protected),'powerpoint',str(Path(temp)/'out.jpg'))
             invalid = Path(temp)/'invalid.ppt'
             invalid.write_bytes(b'unknown legacy format')
-            with self.assertRaisesRegex(RuntimeError,'判定できない'):
-                check_powerpoint(invalid)
+            self.assertIsNone(check_powerpoint(invalid))
 
     def test_legacy_detector_result(self):
         with tempfile.TemporaryFile() as stream:
