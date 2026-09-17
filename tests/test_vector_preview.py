@@ -57,3 +57,36 @@ class VectorTests(unittest.TestCase):
     def test_extensions(self):
         self.assertEqual(kind_for('test.SVG'),'svg')
         self.assertEqual(kind_for('test.AI'),'illustrator')
+
+
+    def test_ai_without_qt_and_corrupt_pdf(self):
+        from unittest.mock import patch
+        from vector_preview import save_illustrator
+        from thumbnail_worker import save_pages
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)/'no-qt.ai'
+            out = Path(temp)/'out.jpg'
+            Image.new('RGB',(1000,500),'red').save(source,format='PDF')
+            original = source.read_bytes()
+            with patch.dict(sys.modules, {'PySide6':None, 'PySide6.QtPdf':None}):
+                save_illustrator(source,out,save_pages)
+            with Image.open(out) as image:
+                self.assertEqual(image.size,(512,256))
+                self.assertGreater(image.getpixel((256,128))[0],240)
+            self.assertEqual(source.read_bytes(),original)
+            source.write_bytes(b'%PDF-1.7\ninvalid')
+            with self.assertRaisesRegex(RuntimeError,'AIのPDF互換'):
+                save_illustrator(source,out,save_pages)
+
+
+    def test_password_error_is_reported_without_dialog(self):
+        import pypdfium2 as pdfium
+        from unittest.mock import patch
+        from vector_preview import save_illustrator
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)/'locked.ai'
+            source.write_bytes(b'%PDF-1.7\n')
+            error = pdfium.PdfiumError('password', err_code=pdfium.raw.FPDF_ERR_PASSWORD)
+            with patch.object(pdfium,'PdfDocument',side_effect=error):
+                with self.assertRaisesRegex(RuntimeError,'パスワード付きAI'):
+                    save_illustrator(source,Path(temp)/'out.jpg',None)

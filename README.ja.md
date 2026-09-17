@@ -17,13 +17,44 @@
 
 `setup.bat` の代わりに、Anaconda Promptでアプリのフォルダへ移動して実行します。
 
+AIのサムネイル生成にはpypdfium2を使用します（QtPdfは不要）。既存環境では `conda install -c conda-forge "pypdfium2>=4.30,<6"` を実行し、アプリを再起動して、エラーになったAIを再生成してください。
+
 ```shell
-conda create -n media-catalog python=3.12
+conda create -n media-catalog --override-channels -c conda-forge python=3.12 "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
 conda activate media-catalog
-conda install -c conda-forge ffmpeg
-python -m pip install -r requirements.txt
 python app.py
 ```
+
+すべてCondaで導入します。`setup.bat`・`start.bat` は別のvenv用なので、Conda環境では使いません。既存の環境を使う場合は、対象環境を有効にして次を実行してください（例：`conda activate qt_test`）。
+
+```shell
+conda install --override-channels -c conda-forge "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
+```
+
+### コンソールなしでWindowsログオン時に起動（Conda）
+
+1. まずAnaconda Promptで `python app.py` が動くことを確認します。`conda info --base` でConda本体、対象環境を有効にして `echo %CONDA_PREFIX%` で環境の場所を確認します。
+2. 次をアプリのフォルダに `start-hidden.vbs` として保存し、3つのパスを自分の環境に変更します。メモ帳ではファイルの種類を「すべてのファイル」にし、日本語パスを使う場合はUTF-16 LEで保存してください。
+
+```vbscript
+Set sh = CreateObject("WScript.Shell")
+q = Chr(34)
+condaBat = "C:\Users\YourName\miniconda3\condabin\conda.bat"
+envDir = "C:\Users\YourName\miniconda3\envs\media-catalog"
+appDir = "C:\Users\YourName\Documents\media_catalog"
+sh.CurrentDirectory = appDir
+command = q & sh.ExpandEnvironmentStrings("%ComSpec%") & q & " /d /s /c " & q & _
+    q & condaBat & q & " activate " & q & envDir & q & " && " & _
+    q & envDir & "\pythonw.exe" & q & " " & q & appDir & "\app.py" & q & q
+sh.Run command, 0, False
+```
+
+3. `start-hidden.vbs` をダブルクリックして起動を確認します。Conda環境を有効にしてから `pythonw.exe` で起動するため、コンソールを表示しません。**アプリのメイン画面は表示されます**。
+4. `Win+R` → `shell:startup` を開き、上記VBSへのショートカットを置きます。次回のWindowsログオンから自動起動します。解除はこのショートカットを削除します。
+
+起動しない場合はAnaconda Promptから `python app.py` を実行してエラーを確認してください。Windows Script Host / VBScriptが無効な環境ではこの方法は使えません。パス・環境名を変更した場合はVBSも更新します。スタートアップ登録は自動では行いません。
+
+参考：[Conda環境の有効化](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html)、[Windowsスタートアップ設定](https://support.microsoft.com/en-us/windows/configure-startup-applications-in-windows-115a420a-0bff-4a6f-90e0-1934c844e473)。
 
 ## 基本操作
 
@@ -52,6 +83,10 @@ python app.py
 アプリは元ファイルを変更・削除しません。見つからなくなったファイルは削除候補として確認できます。登録解除・カタログからの削除では、関連するメモ・タグ・サムネイルも削除されます。元ファイルを外部アプリで開いた場合は、そちらで編集・保存できます。
 
 ## 取り込み・検索
+
+**DB全体を別PCへ移す：** 元PCの「DBバックアップ」で保存したファイルを、移行先の「設定・管理」→「DB全体を復元」で選びます。登録フォルダごとに「このPCでのパス」を確認・変更し、「復元して終了」を押します。終了後に再起動すると、サムネイル・メモ・タグ・お気に入りを含む復元DBへ切り替わります。定期スキャンと自動生成はOFFになります。パスを確認してからONにしてください。
+
+**現在のDBのパスだけ変更：** 「設定・管理」→「登録フォルダのパス変更」を使います。フォルダや元ファイルそのものは移動しません。復元もパス変更も、DBを別コピーとして保存します。以前のDBは残り、完了画面に場所を表示します。戻す場合はそのDBを「DB全体を復元」で選びます。「DB保存フォルダを開く」で現在の保存場所を確認できます。
 
 メモ・タグの持ち運びは「設定・管理」→「メモ・タグの取り込み」から、別PCの「DBバックアップ」で保存したDBを選びます。パスが違う場合は対応する元・先フォルダを指定し、「差分を確認」で内容を確認してください。タグは重複を除いて統合し、メモ競合は行ごとに選択できます。適用前のDBはデータフォルダ内の `backups` に自動保存されます。元ファイル・取り込み元DB・お気に入り・サムネイルは変更しません。
 

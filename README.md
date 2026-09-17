@@ -17,13 +17,44 @@ Video thumbnails require **FFmpeg** on PATH. PowerPoint thumbnails require **Mic
 
 Use Anaconda Prompt in the app folder instead of `setup.bat`:
 
+AI previews use pypdfium2; QtPdf is no longer required. Existing environments: run `conda install -c conda-forge "pypdfium2>=4.30,<6"`, restart the app, then regenerate failed AI previews.
+
 ```shell
-conda create -n media-catalog python=3.12
+conda create -n media-catalog --override-channels -c conda-forge python=3.12 "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
 conda activate media-catalog
-conda install -c conda-forge ffmpeg
-python -m pip install -r requirements.txt
 python app.py
 ```
+
+All dependencies are installed with Conda. Do not use `setup.bat` / `start.bat` for this environment; those use a separate venv. For an existing environment, activate it first (for example, `conda activate qt_test`), then run:
+
+```shell
+conda install --override-channels -c conda-forge "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
+```
+
+### Start at Windows sign-in without a console (Conda)
+
+1. Confirm `python app.py` works in Anaconda Prompt. Find the Conda installation with `conda info --base` and the activated environment with `echo %CONDA_PREFIX%`.
+2. Save this as `start-hidden.vbs` in the app folder, adjusting all three paths. In Notepad, select “All files”; use UTF-16 LE when paths contain Japanese characters.
+
+```vbscript
+Set sh = CreateObject("WScript.Shell")
+q = Chr(34)
+condaBat = "C:\Users\YourName\miniconda3\condabin\conda.bat"
+envDir = "C:\Users\YourName\miniconda3\envs\media-catalog"
+appDir = "C:\Users\YourName\Documents\media_catalog"
+sh.CurrentDirectory = appDir
+command = q & sh.ExpandEnvironmentStrings("%ComSpec%") & q & " /d /s /c " & q & _
+    q & condaBat & q & " activate " & q & envDir & q & " && " & _
+    q & envDir & "\pythonw.exe" & q & " " & q & appDir & "\app.py" & q & q
+sh.Run command, 0, False
+```
+
+3. Double-click the VBS to test it. It activates Conda and launches `pythonw.exe` without a console. **The application's main window still opens.**
+4. Press `Win+R`, enter `shell:startup`, and place a shortcut to the VBS there. It will run at your next Windows sign-in. Remove the shortcut to disable startup.
+
+If startup fails, run `python app.py` in Anaconda Prompt to see the error. This method requires Windows Script Host / VBScript to be enabled. Update the VBS if paths change. The app does not register itself for startup.
+
+References: [Conda activation](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html), [Windows startup settings](https://support.microsoft.com/en-us/windows/configure-startup-applications-in-windows-115a420a-0bff-4a6f-90e0-1934c844e473).
 
 ## Everyday use
 
@@ -52,6 +83,10 @@ Scans compare file size and modification time. This assumes your cloud client ca
 The app does not modify or delete original files. Missing files are marked for review; removing catalog entries or unregistering a folder also removes their saved notes, tags and thumbnails. Opening an original in another app allows editing there.
 
 ## Import and search
+
+**Move a full catalog to another PC:** create a database backup on the source PC, then choose **Settings → Restore full database** on the destination. Review each **Path on this PC**, select **Restore and exit**, and restart after the app exits. Thumbnails, notes, tags and favorites are retained. Periodic scans and auto-generation start OFF; check paths before enabling them.
+
+**Change paths in the current catalog:** use **Settings → Relocate catalog folders**. Original folders/files are not moved. Both operations create a separate local database copy and retain the previous database; its location is shown at completion. To return to it, select it via **Restore full database**. **Open database folder** shows the active database location.
 
 To transfer notes and tags, open **Settings → Import notes and tags** and choose a database saved with **Back up database** on the other PC. Map source/local folders if paths differ, then preview changes. Tags are combined without duplicates; conflicting notes have a per-file choice. Before applying, a database backup is saved under `backups` in the data folder. Original files, the source database, favorites and thumbnails are unchanged.
 

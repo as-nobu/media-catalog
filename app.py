@@ -41,7 +41,8 @@ class Service(QThread):
         self.stop_event = threading.Event()
         self.wake = threading.Event()
         self.scan_requested = threading.Event()
-        self.scan_requested.set()
+        self.scan_enabled = db.get_setting('scan_enabled','1')=='1'
+        if self.scan_enabled:self.scan_requested.set()
         self.interval = int(db.get_setting('interval',600))
         self.generate = db.get_setting('generate','1') == '1'
         self.timeout = int(db.get_setting('timeout',1800))
@@ -73,7 +74,7 @@ class Service(QThread):
                         scan_future = None
                         last_scan = time.monotonic()
                         self.changed.emit()
-                    if scan_future is None and (self.scan_requested.is_set() or time.monotonic()-last_scan >= self.interval):
+                    if scan_future is None and (self.scan_requested.is_set() or (self.scan_enabled and time.monotonic()-last_scan >= self.interval)):
                         self.scan_requested.clear()
                         scan_future = scanners.submit(self.scan_all)
                     for future in list(active):
@@ -673,6 +674,7 @@ class Window(QMainWindow):
     def __init__(self, db):
         super().__init__()
         self.db = db
+        self.data_home = Path(db.path).parent
         set_language(db.get_setting('language','ja'))
         install_dialog_translator()
         self.exiting = False
@@ -747,6 +749,9 @@ class Window(QMainWindow):
         options_button.toggled.connect(options.setVisible)
         filters = QHBoxLayout()
         options_layout.addLayout(filters)
+        self.auto_scan=QCheckBox('定期スキャン')
+        self.auto_scan.setChecked(db.get_setting('scan_enabled','1')=='1')
+        filters.addWidget(self.auto_scan)
         self.generate = QCheckBox('自動生成（未キャッシュは取得）')
         self.generate.setChecked(db.get_setting('generate','1')=='1')
         filters.addWidget(self.generate)
@@ -779,6 +784,11 @@ class Window(QMainWindow):
         import_button = QPushButton('メモ・タグの取り込み')
         import_button.clicked.connect(self.import_annotations)
         filters.addWidget(import_button)
+        restore_bar=QHBoxLayout()
+        options_layout.addLayout(restore_bar)
+        for text,callback in [('DB全体を復元',self.restore_catalog),('登録フォルダのパス変更',self.relocate_catalog),('DB保存フォルダを開く',lambda:self.explore(str(Path(self.db.path).parent)))]:
+            button=QPushButton(text);button.clicked.connect(callback);restore_bar.addWidget(button)
+        restore_bar.addStretch()
         settings.addStretch()
         self.progress_label = QLabel('生成状況を確認中…')
         self.progress_label.setObjectName('progress')
@@ -862,6 +872,7 @@ class Window(QMainWindow):
         self.service.message.connect(lambda msg:self.statusBar().showMessage(translate_message(msg)))
         self.service.copy_ready.connect(self.open_local_copy)
         self.generate.toggled.connect(self.settings_changed)
+        self.auto_scan.toggled.connect(self.settings_changed)
         self.interval.valueChanged.connect(self.settings_changed)
         self.timeout.valueChanged.connect(self.settings_changed)
         self.tray = QSystemTrayIcon(self.windowIcon(),self)
@@ -1025,6 +1036,8 @@ class Window(QMainWindow):
         self.count.setText(tr('{v0:,} 件 / 削除候補 {v1:,} / タイムアウト {v2:,}',v0=len(rows),v1=sum(r['missing'] for r in rows),v2=sum(r['timed_out'] for r in rows)))
 
     def settings_changed(self,*args):
+        self.service.scan_enabled=self.auto_scan.isChecked()
+        self.db.set_setting('scan_enabled',int(self.service.scan_enabled))
         self.service.interval = self.interval.value()*60
         self.service.generate = self.generate.isChecked()
         self.db.set_setting('interval',self.service.interval)
@@ -1112,6 +1125,27 @@ class Window(QMainWindow):
         self.progress_label.setText(tr('{v0} | 完了 {v1} / 全体 {v2} | 未完了 {v3} | タイムアウト {v4} | エラー {v5} | 処理中 {v6}\n',
             v0=state,v1=counts['complete'],v2=counts['total'],v3=counts['pending'],v4=counts['timeout'],v5=counts['errors'],v6=len(self.active_jobs))+
             ' / '.join(tr('{v0} ({v1}秒)',v0=name,v1=seconds) for name,seconds in self.active_jobs))
+
+    def restore_catalog(self):
+        path,_=QFileDialog.getOpenFileName(self,tr('DB全体を復元'),'', 'SQLite (*.sqlite3 *.sqlite *.db);;All files (*)')
+        if path:self.prepare_catalog_switch(path)
+
+    def relocate_catalog(self):
+        self.prepare_catalog_switch(self.db.path)
+
+    def prepare_catalog_switch(self,path):
+        if getattr(self,'backup_running',False):
+            QMessageBox.information(self,tr('保存中'),tr('バックアップ完了後に終了してください。'));return
+        if self.details.dirty() and not self.details.save():return
+        try:
+            from restore_dialog import RestoreDialog
+            dialog=RestoreDialog(path,self.data_home,self)
+            if dialog.exec()!=QDialog.DialogCode.Accepted:return
+            self.pending_catalog=dialog.result_path
+            QMessageBox.information(self,tr('復元の準備完了'),tr('終了後にもう一度アプリを起動してください。以前のDB: {v0}',v0=self.db.path))
+            self.quit_app()
+        except Exception as exc:
+            QMessageBox.warning(self,tr('復元失敗'),translate_message(str(exc)))
 
     def import_annotations(self):
         if self.details.dirty() and not self.details.save():
@@ -1265,6 +1299,12 @@ class Window(QMainWindow):
     def finish_quit(self):
         if not self.service.isRunning():
             self.shutdown_timer.stop()
+            if getattr(self,'pending_catalog',None):
+                try:
+                    from catalog_restore import select_catalog
+                    select_catalog(self.data_home,self.pending_catalog)
+                except Exception as exc:
+                    QMessageBox.warning(self,tr('復元失敗'),translate_message(str(exc)))
             for window in self.findChildren(PagesWindow):
                 window.close()
             self.view.clear_hover()
@@ -1288,8 +1328,12 @@ def main():
     if not lock.tryLock(100):
         QMessageBox.information(None,'Media Catalog',tr('すでに起動しています。タスクトレイをご確認ください。'))
         return 0
-    db = Catalog(data/'catalog.sqlite3')
+    from catalog_restore import selected_catalog
+    try:db = Catalog(selected_catalog(data))
+    except Exception as exc:
+        QMessageBox.warning(None,'Media Catalog',str(exc));return 1
     window = Window(db)
+    window.data_home=data
     if '--tray' not in sys.argv or not QSystemTrayIcon.isSystemTrayAvailable():
         window.show()
     return app.exec()

@@ -70,23 +70,36 @@ def save_illustrator(source,output,save_pages):
     with open(source,'rb') as stream:
         if b'%PDF-' not in stream.read(1024):
             raise RuntimeError('PDF互換でないAIファイルには対応していません。IllustratorでPDF互換を有効にして別途保存してください。')
-    ensure_qt()
-    from PySide6.QtCore import QSize
-    from PySide6.QtPdf import QPdfDocument
-    document = QPdfDocument(None)
     try:
-        error = document.load(str(source))
-        if error==QPdfDocument.Error.IncorrectPassword:
-            raise RuntimeError('パスワード付きAIのため、自動生成をスキップしました。')
-        if error!=QPdfDocument.Error.None_ or document.pageCount()<1:
+        import pypdfium2 as pdfium
+    except ImportError as exc:
+        raise RuntimeError('pypdfium2を読み込めません。依存パッケージのインストールを確認してください。') from exc
+    try:
+        document = pdfium.PdfDocument(str(source))
+    except pdfium.PdfiumError as exc:
+        if exc.err_code == pdfium.raw.FPDF_ERR_PASSWORD:
+            raise RuntimeError('パスワード付きAIのため、自動生成をスキップしました。') from exc
+        raise RuntimeError('AIのPDF互換データを読み込めません。') from exc
+    with document:
+        total = len(document)
+        if total < 1:
             raise RuntimeError('AIのPDF互換データを読み込めません。')
         def pages():
-            for index in range(min(document.pageCount(),MAX_PAGE_THUMBNAILS)):
-                size = document.pagePointSize(index)
-                if size.isEmpty():
-                    raise RuntimeError('ベクター画像を描画できません。')
-                scale = 512/max(size.width(),size.height())
-                yield pillow_image(document.render(index,QSize(max(1,round(size.width()*scale)),max(1,round(size.height()*scale)))))
-        save_pages(pages(),output,metadata={'形式':'Adobe Illustrator (PDF)'},total_pages=document.pageCount())
-    finally:
-        document.close()
+            # Each thumbnail worker is a separate process; PDFium calls stay serial.
+            for index in range(min(total, MAX_PAGE_THUMBNAILS)):
+                page = document[index]
+                try:
+                    width, height = page.get_size()
+                    if not (0 < width < float('inf') and 0 < height < float('inf')):
+                        raise RuntimeError('ベクター画像を描画できません。')
+                    bitmap = page.render(scale=512/max(width, height), fill_color=(255,255,255,255))
+                    try:
+                        # Detach from PDFium memory before closing the bitmap.
+                        image = bitmap.to_pil().convert('RGB').copy()
+                        image.thumbnail((512,512), Image.Resampling.LANCZOS)
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+                yield image
+        save_pages(pages(),output,metadata={'形式':'Adobe Illustrator (PDF)'},total_pages=total)
