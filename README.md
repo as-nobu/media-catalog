@@ -72,7 +72,7 @@ References: [Conda activation](https://docs.conda.io/projects/conda/en/latest/us
 | Back up | Select **Back up database** and save to a new file. |
 | Quit | Right-click the tray icon and select **Quit**. Closing the window normally hides it in the tray. |
 
-Notes, tags and favorites are saved when you switch files, hide the app in the tray, quit, or start a backup. Language switching preserves unsaved edits.
+Notes, tags and favorites are saved after one second without further edits, and when you switch files, hide the app in the tray, quit, or start a backup. Language switching preserves unsaved edits.
 
 ## Cloud folders and your files
 
@@ -108,3 +108,6 @@ Native Windows dialogs and messages from external applications may follow the OS
 ## License
 
 [MIT License](LICENSE). External applications and dependencies retain their own licenses.
+
+Files with generation errors or timeouts are excluded from automatic generation, including after restart, periodic scans, or file changes. File listing metadata still updates. To retry, select the files and use Regenerate selected or the context menu regeneration command.
+

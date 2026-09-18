@@ -86,7 +86,7 @@ class Catalog:
                 c.execute('DELETE FROM page_thumbs WHERE page_number>?',(MAX_PAGE_THUMBNAILS,))
                 c.execute("INSERT INTO settings VALUES ('page_limit_20_v1','1')")
             if not c.execute("SELECT 1 FROM settings WHERE key='four_page_thumbnail_v1'").fetchone():
-                # Keep old thumbnails visible until replacement succeeds; respect timeout holds.
+                # Keep old thumbnails visible until replacement succeeds; respect error and timeout holds.
                 c.execute("""UPDATE files SET thumb_size=NULL,thumb_mtime=NULL
                     WHERE kind='powerpoint' OR substr(lower(name),-4)='.tif' OR substr(lower(name),-5)='.tiff'""")
                 c.execute("INSERT INTO settings VALUES ('four_page_thumbnail_v1','1')")
@@ -94,11 +94,11 @@ class Catalog:
                 c.execute('UPDATE files SET thumb_size=NULL,thumb_mtime=NULL')
                 c.execute("INSERT INTO settings VALUES ('pages_512_v1','1')")
             if not c.execute("SELECT 1 FROM settings WHERE key='empty_ppt_v1'").fetchone():
-                c.execute("""UPDATE files SET retry_at=0,timed_out=0,thumb_size=NULL,error=''
+                c.execute("""UPDATE files SET thumb_size=NULL
                     WHERE kind='powerpoint' AND (size=0 OR instr(error,'スライドがありません')>0)""")
                 c.execute("INSERT INTO settings VALUES ('empty_ppt_v1','1')")
             if not c.execute("SELECT 1 FROM settings WHERE key='empty_images_unknown_ppt_v1'").fetchone():
-                c.execute("""UPDATE files SET retry_at=0,timed_out=0,thumb_size=NULL,error=''
+                c.execute("""UPDATE files SET thumb_size=NULL
                     WHERE (size=0 AND kind IN ('image','svg','illustrator'))
                     OR (kind='powerpoint' AND instr(error,'PPTの暗号化状態を判定できない')>0)""")
                 c.execute("INSERT INTO settings VALUES ('empty_images_unknown_ppt_v1','1')")
@@ -207,12 +207,6 @@ class Catalog:
                     ON CONFLICT(path) DO UPDATE SET
                     changed_at=CASE WHEN files.size!=excluded.size OR files.mtime_ns!=excluded.mtime_ns
                         THEN excluded.changed_at ELSE files.changed_at END,
-                    error=CASE WHEN files.size!=excluded.size OR files.mtime_ns!=excluded.mtime_ns
-                        THEN '' ELSE files.error END,
-                    retry_at=CASE WHEN files.size!=excluded.size OR files.mtime_ns!=excluded.mtime_ns
-                        THEN 0 ELSE files.retry_at END,
-                    timed_out=CASE WHEN files.size!=excluded.size OR files.mtime_ns!=excluded.mtime_ns
-                        THEN 0 ELSE files.timed_out END,
                     size=excluded.size,mtime_ns=excluded.mtime_ns,seen=excluded.seen,missing=0''', pending)
             count += len(pending)
             pending.clear()
@@ -335,13 +329,14 @@ class Catalog:
             return r[0] if r else None
 
     def next_job(self, exclude=(), skip_office=False):
+        # Errors persist until explicit regeneration, including across metadata scans.
         now = time.time()
         excluded = tuple(exclude)
         extra = (' AND id NOT IN ('+','.join('?' for _ in excluded)+')') if excluded else ''
         if skip_office:
             extra += " AND kind!='powerpoint'"
         with self.connect() as c:
-            r = c.execute('''SELECT * FROM files WHERE missing=0 AND timed_out=0 AND retry_at<=? AND changed_at<=?
+            r = c.execute('''SELECT * FROM files WHERE missing=0 AND error='' AND timed_out=0 AND retry_at<=? AND changed_at<=?
                 AND (thumb_size IS NULL OR thumb_size!=size OR thumb_mtime!=mtime_ns)
                 '''+extra+' ORDER BY changed_at,id LIMIT 1',(now,now-3,*excluded)).fetchone()
             return dict(r) if r else None
@@ -426,7 +421,7 @@ class Catalog:
     def fail_job(self, job, error, timed_out=False):
         with self.connect() as c:
             c.execute('UPDATE files SET error=?,retry_at=?,timed_out=? WHERE id=? AND registration_uid=? AND path=? AND size=? AND mtime_ns=?',
-                (str(error)[:2000],time.time()+600,int(timed_out),job['id'],job['registration_uid'],job['path'],job['size'],job['mtime_ns']))
+                (str(error)[:2000] or type(error).__name__,0,int(timed_out),job['id'],job['registration_uid'],job['path'],job['size'],job['mtime_ns']))
 
     def regenerate(self, ids):
         with self.connect() as c:

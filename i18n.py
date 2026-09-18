@@ -5,6 +5,7 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    '未保存（入力が途切れて1秒後に保存）': 'Unsaved (saves after 1 second of inactivity)',
     'pypdfium2を読み込めません。依存パッケージのインストールを確認してください。': 'Cannot load pypdfium2. Check that its dependencies are installed.',
     '変更先は絶対パスで指定してください。': 'Specify absolute destination paths.',
     'DB復元・フォルダパス変更': 'Restore database / relocate folders',

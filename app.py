@@ -567,6 +567,11 @@ class DetailsWindow(QWidget):
         self.status = QLabel()
         layout.addWidget(self.status)
         self.loading = False
+        self.save_timer = QTimer(self)
+        self.save_timer.setSingleShot(True)
+        self.save_timer.setInterval(1000)
+        self.save_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.save_timer.timeout.connect(lambda: self.save(automatic=True) if self.dirty() else None)
         self.memo.textChanged.connect(self.queue_save)
         self.tags.textChanged.connect(self.queue_save)
         self.favorite.toggled.connect(self.queue_save)
@@ -582,9 +587,15 @@ class DetailsWindow(QWidget):
     def queue_save(self,*args):
         if self.loading or self.uid is None:
             return
-        self.status.setText(tr('未保存（ファイル切り替え・終了時に保存）') if self.dirty() else tr('保存済み'))
+        self.save_timer.stop()
+        if self.dirty():
+            self.status.setText(tr('未保存（入力が途切れて1秒後に保存）'))
+            self.save_timer.start()
+        else:
+            self.status.setText(tr('保存済み'))
 
     def set_row(self,row):
+        self.save_timer.stop()
         self.loading = True
         if row is None:
             self.uid = None
@@ -636,6 +647,7 @@ class DetailsWindow(QWidget):
             self.info.setPlainText(text)
 
     def save(self,automatic=False):
+        self.save_timer.stop()
         if self.uid is None:
             return False
         text = self.memo.toPlainText()
@@ -667,6 +679,7 @@ class DetailsWindow(QWidget):
                 event.ignore()
                 return
         self.timer.stop()
+        self.save_timer.stop()
         event.accept()
 
 

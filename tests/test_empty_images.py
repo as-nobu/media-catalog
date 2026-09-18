@@ -41,7 +41,7 @@ class EmptyImagesTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'パスワード付き'):
                     check_powerpoint(source.name)
 
-    def test_migration_requeues_previous_errors(self):
+    def test_migration_preserves_previous_errors(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)/'sources'; root.mkdir()
             (root/'empty.jpg').touch()
@@ -52,4 +52,5 @@ class EmptyImagesTests(unittest.TestCase):
                 c.execute("UPDATE files SET error='PPTの暗号化状態を判定できないため、自動生成をスキップしました。',timed_out=1,retry_at=9999999999")
                 c.execute("DELETE FROM settings WHERE key='empty_images_unknown_ppt_v1'")
             db=Catalog(db.path)
-            self.assertTrue(all(not r['error'] and not r['timed_out'] and r['retry_at']==0 for r in db.rows()))
+            self.assertTrue(all(r['error'] for r in db.rows()))
+            self.assertIsNone(db.next_job())

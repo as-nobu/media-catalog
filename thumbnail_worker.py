@@ -129,6 +129,14 @@ def read_pages(path):
             yield fit_page(im,(512,512))
 
 
+def read_first_page(path):
+    pages = read_pages(path)
+    try:
+        return next(pages)
+    finally:
+        pages.close()
+
+
 def export_slides(presentation, temp):
     count = presentation.Slides.Count
     if count<1:
@@ -145,10 +153,18 @@ def save_pages(pages,output,metadata=None,total_pages=None):
     folder = Path(str(output)+'.pages')
     folder.mkdir(exist_ok=True)
     count = 0
-    for count,page in enumerate(islice(pages,MAX_PAGE_THUMBNAILS),1):
-        page.save(folder/f'{count}.jpg','JPEG',quality=85)
-        if count==1:
-            page.save(output,'JPEG',quality=85)
+    iterator = iter(pages)
+    try:
+        for count,page in enumerate(islice(iterator,MAX_PAGE_THUMBNAILS),1):
+            page.save(folder/f'{count}.jpg','JPEG',quality=85)
+            if count==1:
+                page.save(output,'JPEG',quality=85)
+    finally:
+        # islice stops without exhausting the generator at the page limit.
+        # Close its file handles before TemporaryDirectory removes staged files.
+        close = getattr(iterator,'close',None)
+        if close is not None:
+            close()
     if not count:
         raise ValueError('表示できるページがありません。')
     Path(str(output)+'.json').write_text(json.dumps({'page_count':total_pages if total_pages is not None else count,'thumbnail_count':count,'metadata':metadata},ensure_ascii=False),encoding='utf-8')
@@ -205,7 +221,7 @@ def generate(source, kind, output):
                 if presentation.Slides.Count == 0:
                     save_empty(output,'スライドなし')
                     return
-                pages = (next(read_pages(path)) for path in export_slides(presentation,temp))
+                pages = (read_first_page(path) for path in export_slides(presentation,temp))
                 save_pages(pages,output,total_pages=presentation.Slides.Count)
             finally:
                 try:

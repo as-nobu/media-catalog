@@ -55,3 +55,32 @@ class PageLimitTests(unittest.TestCase):
                 self.assertEqual(c.execute('SELECT max(page_number) FROM page_thumbs').fetchone()[0],20)
             self.assertEqual(db.rows()[0]['page_count'],30)
             self.assertEqual(source.read_bytes(),b'unchanged source')
+
+
+    def test_file_handles_closed_at_limit_and_on_save_error(self):
+        from unittest.mock import patch
+        from thumbnail_worker import read_pages, save_pages
+        real_open = Image.open
+        for count in (19,20,21):
+            for fail in (False,True):
+                with self.subTest(count=count,fail=fail), tempfile.TemporaryDirectory() as temp:
+                    source=Path(temp)/'source.tif'
+                    frames=[Image.new('RGB',(8,8)) for _ in range(count)]
+                    frames[0].save(source,save_all=True,append_images=frames[1:])
+                    original=source.read_bytes()
+                    handles=[]
+                    def tracked_open(*args,**kwargs):
+                        im=real_open(*args,**kwargs)
+                        handles.append(im.fp)
+                        return im
+                    pages=read_pages(source)
+                    with patch('thumbnail_worker.Image.open',side_effect=tracked_open):
+                        if fail:
+                            with patch.object(Image.Image,'save',side_effect=OSError('save failed')):
+                                with self.assertRaisesRegex(OSError,'save failed'):
+                                    save_pages(pages,Path(temp)/'out.jpg')
+                        else:
+                            save_pages(pages,Path(temp)/'out.jpg')
+                    self.assertIsNone(pages.gi_frame)
+                    self.assertTrue(handles and all(h.closed for h in handles))
+                    self.assertEqual(source.read_bytes(),original)
