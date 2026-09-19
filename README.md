@@ -98,7 +98,7 @@ Search supports space-separated AND terms, `"phrases"`, and `-exclusions`. Scope
 - **Microscope TIFF:** integer and floating-point grayscale images use per-page brightness normalization for previews, not quantitative measurement. Original data is unchanged.
 - **Password-protected PowerPoint:** confirmed encryption is skipped. Unknown encryption status proceeds to generation; a password dialog may appear. Zero-byte images and presentations are cataloged as empty files without an error.
 - **FFmpeg not found:** activate the environment used to run the app, run `conda install -c conda-forge ffmpeg`, then restart and retry. For a separate installation, add FFmpeg to PATH or set `MEDIA_CATALOG_FFMPEG` to its executable.
-- **Large image:** the default limit is **300 megapixels per page**. Large images also need sufficient RAM. If necessary, set `MEDIA_CATALOG_MAX_IMAGE_MP` before launching; the value is in megapixels.
+- **Large image:** the default limit is **300 megapixels per page**. Large images also need sufficient RAM. Set Maximum pixels under Settings to 1–2000 MP. The value is stored in the database and applies to the next generation job. Manually regenerate files that previously failed.
 - **Timeout:** the default is 30 minutes. Increase it for slow downloads, then retry the affected files.
 - **Backup:** use the app's backup command while it is running. Backups include the catalog and thumbnails, not original files. To restore, fully quit, set aside the current data folder, and place the backup there as `catalog.sqlite3`; do not reuse old `-wal` or `-shm` files.
 - **Data location:** a local per-user MediaCatalog folder under `%LOCALAPPDATA%`. Updating the app keeps the catalog.
@@ -111,3 +111,5 @@ Native Windows dialogs and messages from external applications may follow the OS
 
 Files with generation errors or timeouts are excluded from automatic generation, including after restart, periodic scans, or file changes. File listing metadata still updates. To retry, select the files and use Regenerate selected or the context menu regeneration command.
 
+
+TIFF scale: reads standard X/YResolution and ResolutionUnit tags, and OME-TIFF PhysicalSizeX/Y (preferred). Details show µm/pixel and the source. Toggle hover scale bars in Settings. Regenerate existing TIFF previews to collect calibration. Standard tags may represent print DPI rather than specimen calibration. Proprietary vendor tags are not supported.

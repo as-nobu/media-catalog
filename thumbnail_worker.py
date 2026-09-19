@@ -13,11 +13,11 @@ from limits import MAX_PAGE_THUMBNAILS, EMPTY_FILE_KINDS
 from PIL import Image, ImageOps, ExifTags
 
 
-def configure_image_limit():
+def configure_image_limit(megapixels=300):
     # Isolated worker only. Keep a finite limit; Pillow's error threshold is 2x.
-    megapixels = int(os.environ.get('MEDIA_CATALOG_MAX_IMAGE_MP','300'))
+    megapixels = int(megapixels)
     if not 1 <= megapixels <= 2000:
-        raise ValueError('MEDIA_CATALOG_MAX_IMAGE_MP must be between 1 and 2000.')
+        raise ValueError('max_image_mp must be between 1 and 2000.')
     Image.MAX_IMAGE_PIXELS = megapixels * 1_000_000 // 2
     warnings.filterwarnings('ignore',category=Image.DecompressionBombWarning)
     return megapixels
@@ -71,6 +71,15 @@ def image_metadata(path):
                 result['EXIF.' + ExifTags.TAGS.get(key,str(key))] = value(v)
         except Exception as exc:
             result['EXIF取得エラー'] = str(exc)[:500]
+        if im.format == 'TIFF':
+            from tiff_scale import ome_scales, calibration
+            count=min(im.n_frames,MAX_PAGE_THUMBNAILS)
+            ome=ome_scales(im.tag_v2.get(270),count)
+            scales=[]
+            for index in range(count):
+                im.seek(index)
+                scales.append(calibration(im,ome.get(index)))
+            result['page_scales']=scales
         return result
 
 
@@ -170,8 +179,8 @@ def save_pages(pages,output,metadata=None,total_pages=None):
     Path(str(output)+'.json').write_text(json.dumps({'page_count':total_pages if total_pages is not None else count,'thumbnail_count':count,'metadata':metadata},ensure_ascii=False),encoding='utf-8')
 
 
-def generate(source, kind, output):
-    configure_image_limit()
+def generate(source, kind, output, max_image_mp=300):
+    configure_image_limit(max_image_mp)
     if os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(output)):
         raise ValueError('元ファイルを出力先にはできません。')
     if kind == 'copy':
@@ -247,11 +256,12 @@ if __name__ == '__main__':
     parser.add_argument('source')
     parser.add_argument('kind')
     parser.add_argument('output')
+    parser.add_argument('--max-image-mp',type=int,default=300)
     args = parser.parse_args()
     try:
-        generate(args.source,args.kind,args.output)
+        generate(args.source,args.kind,args.output,args.max_image_mp)
     except Image.DecompressionBombError:
-        print('画像の画素数が設定上限を超えています。必要なら MEDIA_CATALOG_MAX_IMAGE_MP を増やしてください（既定300MP）。',file=sys.stderr)
+        print('画像の画素数が設定上限を超えています。設定の「最大画素数」を増やし、手動で再生成してください。',file=sys.stderr)
         sys.exit(1)
     except MemoryError:
         print('画像の展開に必要なメモリが不足しています。他のアプリを閉じて再試行してください。',file=sys.stderr)

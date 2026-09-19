@@ -5,6 +5,11 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    'ホバーにスケールバーを表示': 'Show scale bars on hover',
+    'スケール（先頭ページ）: ': 'Scale (first page): ',
+    '最大画素数（1ページ）': 'Maximum pixels (per page)',
+    '1 MP = 100万画素。変更は次の生成から適用': '1 MP = 1 million pixels. Applies to the next generation job.',
+    '画像の画素数が設定上限を超えています。設定の「最大画素数」を増やし、手動で再生成してください。': 'The image exceeds the pixel limit. Increase Maximum pixels in Settings and regenerate manually.',
     '未保存（入力が途切れて1秒後に保存）': 'Unsaved (saves after 1 second of inactivity)',
     'pypdfium2を読み込めません。依存パッケージのインストールを確認してください。': 'Cannot load pypdfium2. Check that its dependencies are installed.',
     '変更先は絶対パスで指定してください。': 'Specify absolute destination paths.',

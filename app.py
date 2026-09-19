@@ -46,6 +46,7 @@ class Service(QThread):
         self.interval = int(db.get_setting('interval',600))
         self.generate = db.get_setting('generate','1') == '1'
         self.timeout = int(db.get_setting('timeout',1800))
+        self.max_image_mp = max(1,min(2000,int(db.get_setting('max_image_mp',300))))
         self.open_requests = queue.Queue()
         self.paused = db.get_setting('paused','0') == '1'
 
@@ -138,7 +139,7 @@ class Service(QThread):
                     out = Path(tempfile.mkdtemp(prefix='view-',dir=preview_root))/job['name']
                 with open(Path(temp)/'error.txt','wb') as err:
                     process = subprocess.Popen([sys.executable,self.worker_script,
-                        job['path'],'copy' if job.get('open_copy') else job['kind'],str(out)],stdout=subprocess.DEVNULL,stderr=err,
+                        job['path'],'copy' if job.get('open_copy') else job['kind'],str(out),'--max-image-mp',str(self.max_image_mp)],stdout=subprocess.DEVNULL,stderr=err,
                         creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0),start_new_session=os.name!='nt')
                     deadline = time.monotonic()+timeout
                     while process.poll() is None:
@@ -323,12 +324,16 @@ class PageBadgeDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+from scale_overlay import overlay, page_scale
+
+
 class HoverListView(QListView):
     """Hover reads the existing thumbnail cache only; never opens a source."""
     def __init__(self,parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.viewport().installEventFilter(self)
+        self.show_scale_bar = True
         self.hover_key = None
         self.hover_timer = QTimer(self)
         self.hover_timer.setSingleShot(True)
@@ -396,7 +401,7 @@ class HoverListView(QListView):
         if row.get('page_count',1)>1 and not isinstance(self.model(),PageModel):
             screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
             area = screen.availableGeometry()
-            request = (key,int(area.width()*.85),int(area.height()*.85))
+            request = (key,int(area.width()*.85),int(area.height()*.85),self.show_scale_bar)
             if request in self.tiles_cache:
                 self.display_popup(QPixmap.fromImage(self.tiles_cache[request]),QCursor.pos())
             elif self.tiles_pending != request:
@@ -409,10 +414,13 @@ class HoverListView(QListView):
             return
         if icon.cacheKey()==self.model().placeholder.cacheKey():
             return
-        self.display_popup(icon.pixmap(QSize(512,512),1.0),QCursor.pos())
+        pixmap=icon.pixmap(QSize(512,512),1.0)
+        if self.show_scale_bar:
+            pixmap=QPixmap.fromImage(overlay(pixmap.toImage(),page_scale(row,row.get('page_number',1))))
+        self.display_popup(pixmap,QCursor.pos())
 
     def build_tiles(self,request,row):
-        key,width,height = request
+        key,width,height = request[:3]
         try:
             count = min(row['page_count'],MAX_PAGE_THUMBNAILS)
             columns = max(range(1,count+1),key=lambda c:min(width/c,(height/math.ceil(count/c))-22))
@@ -435,6 +443,8 @@ class HoverListView(QListView):
                     x,y = ((page-1)%columns)*cellw,((page-1)//columns)*cellh
                     if not image.isNull():
                         scaled = image.scaled(side,side,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation)
+                        if len(request)>3 and request[3]:
+                            scaled=overlay(scaled,page_scale(row,page))
                         painter.drawImage(x+margin+(side-scaled.width())//2,y+margin+(side-scaled.height())//2,scaled)
                     painter.setPen(QColor('#25364b'))
                     if label_height>=12:
@@ -638,8 +648,12 @@ class DetailsWindow(QWidget):
             lines.append(tr('状態: 削除候補'))
         if row['thumb_size'] != row['size'] or row['thumb_mtime'] != row['mtime_ns']:
             lines.append(tr('生成待ち：表示中のメタ情報は前回取得分の場合があります。'))
+        scale=page_scale(row)
+        if scale.get('x') or scale.get('y'):
+            values=' / '.join(f"{axis.upper()}: {scale[axis]:.6g} µm/pixel" for axis in ('x','y') if scale.get(axis))
+            lines.append(tr('スケール（先頭ページ）: ')+values+' ('+scale.get('source','')+')')
         lines.append(tr('\n画像メタ情報（先頭ページ）'))
-        lines.extend(f'{tr(k)}: {translate_message(str(v)) if k in ("状態","EXIF取得エラー") else v}' for k,v in metadata.items())
+        lines.extend(f'{tr(k)}: {translate_message(str(v)) if k in ("状態","EXIF取得エラー") else v}' for k,v in metadata.items() if k != "page_scales")
         if not metadata:
             lines.append(tr('未取得（画像は右クリックの再スキャン・再生成で取得）') if row['kind']=='image' else tr('画像メタ情報の対象外'))
         text = '\n'.join(lines)
@@ -775,6 +789,21 @@ class Window(QMainWindow):
         self.interval.setSuffix(' 分')
         self.interval.setValue(int(db.get_setting('interval',600))//60)
         filters.addWidget(self.interval)
+        image_settings = QHBoxLayout()
+        options_layout.addLayout(image_settings)
+        image_settings.addWidget(QLabel('最大画素数（1ページ）'))
+        self.max_image_mp = QSpinBox()
+        self.max_image_mp.setRange(1,2000)
+        self.max_image_mp.setSuffix(' MP')
+        self.max_image_mp.setValue(max(1,min(2000,int(db.get_setting('max_image_mp',300)))))
+        image_settings.addWidget(self.max_image_mp)
+        pixel_hint=QLabel('1 MP = 100万画素。変更は次の生成から適用')
+        pixel_hint.setWordWrap(True)
+        image_settings.addWidget(pixel_hint)
+        self.scale_bars = QCheckBox('ホバーにスケールバーを表示')
+        self.scale_bars.setChecked(db.get_setting('show_scale_bar','1')=='1')
+        image_settings.addWidget(self.scale_bars)
+        image_settings.addStretch()
         settings = QHBoxLayout()
         options_layout.addLayout(settings)
         settings.addWidget(QLabel('取得・生成タイムアウト'))
@@ -822,6 +851,7 @@ class Window(QMainWindow):
         self.tree.customContextMenuRequested.connect(self.folder_menu)
         split.addWidget(self.tree)
         self.view = HoverListView()
+        self.view.show_scale_bar = self.scale_bars.isChecked()
         self.view.setItemDelegate(PageBadgeDelegate(self.view))
         self.view.setViewMode(QListView.ViewMode.IconMode)
         self.view.setResizeMode(QListView.ResizeMode.Adjust)
@@ -888,6 +918,8 @@ class Window(QMainWindow):
         self.auto_scan.toggled.connect(self.settings_changed)
         self.interval.valueChanged.connect(self.settings_changed)
         self.timeout.valueChanged.connect(self.settings_changed)
+        self.max_image_mp.valueChanged.connect(self.settings_changed)
+        self.scale_bars.toggled.connect(self.settings_changed)
         self.tray = QSystemTrayIcon(self.windowIcon(),self)
         self.tray.setToolTip('Media Catalog')
         menu = QMenu(self)
@@ -1057,6 +1089,12 @@ class Window(QMainWindow):
         self.db.set_setting('generate',int(self.service.generate))
         self.service.timeout = self.timeout.value()*60
         self.db.set_setting('timeout',self.service.timeout)
+        self.service.max_image_mp = self.max_image_mp.value()
+        self.db.set_setting('max_image_mp',self.service.max_image_mp)
+        self.db.set_setting('show_scale_bar',int(self.scale_bars.isChecked()))
+        self.view.show_scale_bar=self.scale_bars.isChecked()
+        self.view.clear_hover()
+        self.view.tiles_cache.clear()
         self.service.wake.set()
 
     def add_folder(self):

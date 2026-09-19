@@ -21,6 +21,20 @@ class WorkerLimitsTests(unittest.TestCase):
         finally:
             Image.MAX_IMAGE_PIXELS=previous
 
+    def test_explicit_limit_overrides_environment_and_is_validated(self):
+        previous=Image.MAX_IMAGE_PIXELS
+        try:
+            with patch.dict(os.environ,{'MEDIA_CATALOG_MAX_IMAGE_MP':'999'}):
+                self.assertEqual(configure_image_limit(1),1)
+                with self.assertRaises(Image.DecompressionBombError):
+                    Image._decompression_bomb_check((1000001,1))
+                self.assertEqual(configure_image_limit(2),2)
+                Image._decompression_bomb_check((1000001,1))
+                for value in (0,2001):
+                    with self.assertRaises(ValueError): configure_image_limit(value)
+        finally:
+            Image.MAX_IMAGE_PIXELS=previous
+
     def test_conda_ffmpeg_and_missing_preflight(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)
