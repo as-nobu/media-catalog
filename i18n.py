@@ -5,6 +5,13 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    '再生成を予約中…': 'Queuing regeneration…',
+    '再生成を予約しました。': 'Regeneration queued.',
+    '再生成の予約に失敗しました: ': 'Could not queue regeneration: ',
+    'スケール: 保存済み情報では判定できません。必要な場合は手動で再取得してください。': 'Scale: insufficient cached metadata. Retrieve manually if needed.',
+    'スケール: 有効な情報がありません。': 'Scale: no valid calibration found.',
+    '保存済みスケール情報は先頭ページのみです。他ページは再取得が必要です。': 'Cached calibration covers only the first page. Retrieve metadata for other pages if needed.',
+
     'ホバーにスケールバーを表示': 'Show scale bars on hover',
     'スケール（先頭ページ）: ': 'Scale (first page): ',
     '最大画素数（1ページ）': 'Maximum pixels (per page)',

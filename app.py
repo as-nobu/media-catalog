@@ -13,7 +13,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PySide6.QtCore import (Qt, QAbstractListModel, QModelIndex, QSize, QThread,
-                            Signal, QObject, QTimer, QUrl, QLockFile, QStandardPaths, QEvent, QPoint, QRect)
+                            Signal, QObject, QTimer, QUrl, QLockFile, QStandardPaths, QEvent, QPoint, QRect, QItemSelection, QItemSelectionModel)
 from PySide6.QtGui import QIcon, QPixmap, QDesktopServices, QAction, QColor, QCursor, QImage, QPainter
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTreeWidget, QTreeWidgetItem, QListView, QSplitter, QCheckBox,
@@ -222,9 +222,14 @@ class ThumbnailModel(QAbstractListModel):
             changed = [i for i,(old,new) in enumerate(zip(self.items,rows)) if old != new]
             self.items = rows
             self.positions = {self.key(r):i for i,r in enumerate(rows)}
-            for i in changed:
-                index = self.index(i)
-                self.dataChanged.emit(index,index)
+            if changed:
+                start=previous=changed[0]
+                for i in changed[1:]:
+                    if i!=previous+1:
+                        self.dataChanged.emit(self.index(start),self.index(previous))
+                        start=i
+                    previous=i
+                self.dataChanged.emit(self.index(start),self.index(previous))
             return
         self.beginResetModel()
         self.items = rows
@@ -652,6 +657,13 @@ class DetailsWindow(QWidget):
         if scale.get('x') or scale.get('y'):
             values=' / '.join(f"{axis.upper()}: {scale[axis]:.6g} µm/pixel" for axis in ('x','y') if scale.get(axis))
             lines.append(tr('スケール（先頭ページ）: ')+values+' ('+scale.get('source','')+')')
+        elif str(metadata.get('形式','')).upper()=='TIFF' or str(row['path']).lower().endswith(('.tif','.tiff')):
+            if 'page_scales' not in metadata:
+                lines.append(tr('スケール: 保存済み情報では判定できません。必要な場合は手動で再取得してください。'))
+            else:
+                lines.append(tr('スケール: 有効な情報がありません。'))
+        if 'page_scales' not in metadata and row['page_count']>1 and (scale.get('x') or scale.get('y')):
+            lines.append(tr('保存済みスケール情報は先頭ページのみです。他ページは再取得が必要です。'))
         lines.append(tr('\n画像メタ情報（先頭ページ）'))
         lines.extend(f'{tr(k)}: {translate_message(str(v)) if k in ("状態","EXIF取得エラー") else v}' for k,v in metadata.items() if k != "page_scales")
         if not metadata:
@@ -701,6 +713,15 @@ class Window(QMainWindow):
     def __init__(self, db):
         super().__init__()
         self.db = db
+        self.ui_pool = ThreadPoolExecutor(max_workers=2,thread_name_prefix='catalog-ui-db')
+        self.list_future = None
+        self.list_again = False
+        self.regen_futures = []
+        self.count_future = None
+        self.cached_counts = dict(total=0,complete=0,pending=0,timeout=0,errors=0)
+        self.db_poll = QTimer(self)
+        self.db_poll.timeout.connect(self.poll_database)
+        self.db_poll.start(50)
         self.data_home = Path(db.path).parent
         set_language(db.get_setting('language','ja'))
         install_dialog_translator()
@@ -1016,11 +1037,56 @@ class Window(QMainWindow):
         item = self.tree.currentItem()
         return item.data(0,Qt.ItemDataRole.UserRole) if item else None
 
+    def list_options(self):
+        return (self.folder(),self.recursive.isChecked(),self.missing.isChecked(),
+                self.search.text(),self.timeouts.isChecked(),self.errors.isChecked(),
+                self.kind_filter.currentData(),self.sort_order.currentData(),self.favorites.isChecked())
+
     def refresh(self):
+        if self.exiting: return
+        if self.list_future is not None:
+            self.list_again = True
+            return
+        options=self.list_options()
+        self.list_request=options
+        def load():
+            rows=self.db.rows(*options[:6],kind=options[6],sort=options[7])
+            if options[8]: rows=[r for r in rows if r['favorite']]
+            return self.db.roots(),self.db.folders(),rows
+        self.list_future=self.ui_pool.submit(load)
+
+    def poll_database(self):
+        for future in self.regen_futures[:]:
+            if future.done():
+                self.regen_futures.remove(future)
+                try:
+                    future.result()
+                    self.service.wake.set()
+                    if not self.exiting:
+                        self.statusBar().showMessage(tr('再生成を予約しました。'))
+                        self.schedule_refresh()
+                except Exception as exc:
+                    self.statusBar().showMessage(tr('再生成の予約に失敗しました: ')+str(exc))
+        if self.count_future is not None and self.count_future.done():
+            future,self.count_future=self.count_future,None
+            try: self.cached_counts=future.result()
+            except Exception as exc: self.statusBar().showMessage(str(exc))
+        if self.list_future is not None and self.list_future.done():
+            future,self.list_future=self.list_future,None
+            try:
+                result=future.result()
+                if not self.exiting and self.list_request==self.list_options():
+                    self.apply_listing(*result)
+                else: self.list_again=True
+            except Exception as exc: self.statusBar().showMessage(str(exc))
+            if self.list_again and not self.exiting:
+                self.list_again=False
+                self.schedule_refresh()
+
+    def apply_listing(self,roots,folders,rows):
         folder = self.folder()
-        selected = {i for i in self.selected_ids()}
-        roots = self.db.roots()
-        folders = self.db.folders()
+        same_order = [self.model.identity(r) for r in rows] == [self.model.identity(r) for r in self.model.items]
+        selected = set() if same_order else {self.model.items[i.row()]['registration_uid'] for i in self.view.selectedIndexes()}
         signature = ([(r['path'],r['error']) for r in roots],folders)
         if getattr(self,'_tree_signature',None) != signature:
             expanded = set()
@@ -1062,15 +1128,19 @@ class Window(QMainWindow):
                 item.setExpanded(path in expanded or any(path==r['path'] for r in roots))
             self.tree.blockSignals(False)
             folder = self.folder()
-        rows = self.db.rows(folder,self.recursive.isChecked(),self.missing.isChecked(),self.search.text(),self.timeouts.isChecked(),self.errors.isChecked(),kind=self.kind_filter.currentData(),sort=self.sort_order.currentData())
-        if self.favorites.isChecked():
-            rows = [r for r in rows if r['favorite']]
+            if folder != self.list_request[0]: self.schedule_refresh()
         self.view.selectionModel().blockSignals(True)
         self.model.reset(rows)
-        from PySide6.QtCore import QItemSelectionModel
-        for i,row in enumerate(rows):
-            if row['id'] in selected:
-                self.view.selectionModel().select(self.model.index(i),QItemSelectionModel.SelectionFlag.Select)
+        if not same_order:
+            selection=QItemSelection()
+            start=None
+            for i in range(len(rows)+1):
+                chosen=i<len(rows) and rows[i]['registration_uid'] in selected
+                if chosen and start is None: start=i
+                if not chosen and start is not None:
+                    selection.select(self.model.index(start),self.model.index(i-1))
+                    start=None
+            self.view.selectionModel().select(selection,QItemSelectionModel.SelectionFlag.ClearAndSelect)
         if self.details.uid:
             current = next((i for i,r in enumerate(rows) if r['registration_uid']==self.details.uid),None)
             if current is not None:
@@ -1116,9 +1186,14 @@ class Window(QMainWindow):
         return [self.model.items[i.row()]['id'] for i in self.view.selectedIndexes()]
 
     def regenerate(self):
-        self.db.regenerate(self.selected_ids())
-        self.service.wake.set()
-        self.schedule_refresh()
+        self.queue_regeneration(self.selected_ids())
+
+    def queue_regeneration(self,ids):
+        if not ids or self.exiting: return
+        self.statusBar().showMessage(tr('再生成を予約中…'))
+        wanted=set(ids)
+        registrations={r['id']:r['registration_uid'] for r in self.model.items if r['id'] in wanted}
+        self.regen_futures.append(self.ui_pool.submit(self.db.regenerate,ids,registrations))
 
     def remove_selected(self):
         candidates = [self.model.items[i.row()] for i in self.view.selectedIndexes() if self.model.items[i.row()]['missing']]
@@ -1171,7 +1246,9 @@ class Window(QMainWindow):
         self.active_jobs = jobs
 
     def update_progress(self):
-        counts = self.db.generation_counts()
+        if self.count_future is None and not self.exiting:
+            self.count_future=self.ui_pool.submit(self.db.generation_counts)
+        counts = self.cached_counts
         state = tr('一時停止（処理中は完了まで継続）') if self.service.paused else (tr('自動生成OFF') if not self.service.generate else tr('生成中'))
         self.progress_label.setText(tr('{v0} | 完了 {v1} / 全体 {v2} | 未完了 {v3} | タイムアウト {v4} | エラー {v5} | 処理中 {v6}\n',
             v0=state,v1=counts['complete'],v2=counts['total'],v3=counts['pending'],v4=counts['timeout'],v5=counts['errors'],v6=len(self.active_jobs))+
@@ -1260,7 +1337,7 @@ class Window(QMainWindow):
         elif chosen==explore_action:
             self.explore(row['parent'])
         elif chosen==retry_action:
-            self.db.regenerate([row['id']])
+            self.queue_regeneration([row['id']])
             self.scan()
             self.schedule_refresh()
 
@@ -1294,7 +1371,7 @@ class Window(QMainWindow):
 
     def retry_timeouts(self):
         ids = [r['id'] for r in self.model.items if r['timed_out'] and not r['missing']]
-        self.db.regenerate(ids)
+        self.queue_regeneration(ids)
         self.scan()
         self.schedule_refresh()
         self.statusBar().showMessage(tr('{v0}件を再試行予約しました。自動生成ONで順次取得・生成します。',v0=len(ids)))
@@ -1348,8 +1425,10 @@ class Window(QMainWindow):
         self.shutdown_timer.start(100)
 
     def finish_quit(self):
-        if not self.service.isRunning():
+        if not self.service.isRunning() and not self.regen_futures and self.list_future is None and self.count_future is None:
             self.shutdown_timer.stop()
+            self.db_poll.stop()
+            self.ui_pool.shutdown(wait=False,cancel_futures=True)
             if getattr(self,'pending_catalog',None):
                 try:
                     from catalog_restore import select_catalog

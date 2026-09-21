@@ -112,4 +112,6 @@ Native Windows dialogs and messages from external applications may follow the OS
 Files with generation errors or timeouts are excluded from automatic generation, including after restart, periodic scans, or file changes. File listing metadata still updates. To retry, select the files and use Regenerate selected or the context menu regeneration command.
 
 
-TIFF scale: reads standard X/YResolution and ResolutionUnit tags, and OME-TIFF PhysicalSizeX/Y (preferred). Details show µm/pixel and the source. Toggle hover scale bars in Settings. Regenerate existing TIFF previews to collect calibration. Standard tags may represent print DPI rather than specimen calibration. Proprietary vendor tags are not supported.
+TIFF scale: reads standard X/YResolution and ResolutionUnit tags, and OME-TIFF PhysicalSizeX/Y (preferred). Details show µm/pixel and the source. Toggle hover scale bars in Settings. Existing TIFFs use cached metadata for first-page calibration. Retrieve manually only if metadata is insufficient or other pages need calibration. Display never reads original files. Standard tags may represent print DPI rather than specimen calibration. Proprietary vendor tags are not supported.
+
+You can select many files and regenerate them together. Queue updates and catalog queries run in the background while selection is preserved. Exiting waits for pending queue updates to finish.

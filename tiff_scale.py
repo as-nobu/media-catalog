@@ -76,3 +76,38 @@ def nice_bar(scale, display_width):
     elif length<1: label=f'{length*1000:g} nm'
     else: label=f'{length:g} µm'
     return pixels,label
+
+
+def saved_scale(metadata, page=1):
+    """Resolve legacy first-page metadata without reading the original file."""
+    scales=metadata.get('page_scales')
+    if isinstance(scales,list) and 0<page<=len(scales):
+        return scales[page-1] if isinstance(scales[page-1],dict) else {}
+    # Older versions saved only first-page tags; never extrapolate to other IFDs.
+    if page!=1 or str(metadata.get('形式','')).upper()!='TIFF': return {}
+    width=positive(metadata.get('幅 (px)'))
+    height=positive(metadata.get('高さ (px)'))
+    if not width or not height: return {}
+    def tag(name,number,default=None):
+        return metadata.get('EXIF.'+name,metadata.get('EXIF.'+str(number),default))
+    def number(value):
+        if isinstance(value,str) and '/' in value:
+            try:
+                numerator,denominator=value.split('/')
+                return positive(float(numerator)/float(denominator))
+            except (ValueError,ZeroDivisionError): return None
+        return positive(value)
+    unit={2:25400,3:10000}.get(number(tag('ResolutionUnit',296,2)))
+    result={'x':None,'y':None,'width':width,'height':height,'source':'TIFF'}
+    for axis,name,n in [('x','XResolution',282),('y','YResolution',283)]:
+        resolution=number(tag(name,n))
+        result[axis]=positive(unit/resolution) if unit and resolution else None
+    description=tag('ImageDescription',270,'')
+    if isinstance(description,str):
+        ome=ome_scales(description,1).get(0)
+        if ome and (ome.get('size_x'),ome.get('size_y'))==(width,height):
+            result.update(ome)
+    if number(tag('Orientation',274,1)) in (5,6,7,8):
+        result['x'],result['y']=result['y'],result['x']
+        result['width'],result['height']=result['height'],result['width']
+    return result

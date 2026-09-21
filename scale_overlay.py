@@ -2,14 +2,15 @@
 import json
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QPainter, QColor
-from tiff_scale import nice_bar
+from tiff_scale import nice_bar, saved_scale
 
 
 def page_scale(row,page=1):
     try:
-        scales=json.loads(row.get('metadata_json','{}')).get('page_scales',[])
-        return scales[page-1] if 0<page<=len(scales) else {}
+        metadata=json.loads(row.get('metadata_json','{}'))
+        return saved_scale(metadata,page) if isinstance(metadata,dict) else {}
     except (ValueError,TypeError,KeyError): return {}
+
 
 
 def overlay(image,scale):

@@ -423,9 +423,13 @@ class Catalog:
             c.execute('UPDATE files SET error=?,retry_at=?,timed_out=? WHERE id=? AND registration_uid=? AND path=? AND size=? AND mtime_ns=?',
                 (str(error)[:2000] or type(error).__name__,0,int(timed_out),job['id'],job['registration_uid'],job['path'],job['size'],job['mtime_ns']))
 
-    def regenerate(self, ids):
+    def regenerate(self, ids, registrations=None):
         with self.connect() as c:
-            c.executemany("UPDATE files SET thumb_size=NULL,thumb_mtime=NULL,retry_at=0,error='',timed_out=0 WHERE id=? AND missing=0",[(i,) for i in ids])
+            sql="UPDATE files SET thumb_size=NULL,thumb_mtime=NULL,retry_at=0,error='',timed_out=0 WHERE id=? AND missing=0"
+            if registrations is None:
+                c.executemany(sql,[(i,) for i in ids])
+            else:
+                c.executemany(sql+' AND registration_uid=?',[(i,registrations[i]) for i in ids if i in registrations])
 
     def confirm_removal(self, ids):
         """Remove catalog rows only; re-list parent successfully before trusting absence."""

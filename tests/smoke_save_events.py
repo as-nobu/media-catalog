@@ -11,7 +11,12 @@ with tempfile.TemporaryDirectory() as tmp:
     p=Path(tmp);(p/'sources').mkdir();(p/'sources'/'a.jpg').write_bytes(b'x')
     db=Catalog(p/'data'/'db.sqlite3');db.add_root(p/'sources');db.scan(db.roots()[0])
     with patch.object(Service,'start'): w=Window(db)
-    w.show();app.processEvents();w.view.setCurrentIndex(w.model.index(0))
+    w.show()
+    deadline=time.monotonic()+5
+    while not w.model.items and time.monotonic()<deadline:
+        app.processEvents();time.sleep(.01)
+    assert w.model.items
+    w.view.setCurrentIndex(w.model.index(0))
     assert not w.windowIcon().isNull() and not w.tray.icon().isNull()
     assert all('編集を破棄' not in b.text() for b in w.findChildren(QPushButton))
     w.details.memo.setPlainText('トレイ収納')
@@ -29,5 +34,5 @@ with tempfile.TemporaryDirectory() as tmp:
     with sqlite3.connect(destination) as c:
         assert c.execute('SELECT memo FROM files').fetchone()[0]=='バックアップ前'
     w.details.timer.stop();w.stats_timer.stop();w.refresh_timer.stop();w.model.pool.shutdown()
-    w.exiting=True;w.close()
+    w.exiting=True;w.db_poll.stop();w.ui_pool.shutdown(wait=True);w.close()
 print('tray/backup save and application icons: PASS')
