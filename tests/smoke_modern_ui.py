@@ -32,6 +32,9 @@ with tempfile.TemporaryDirectory() as temp:
     finally:
         window.service.stop()
         window.service.wait(5000)
+        window.db_poll.stop()
+        window.ui_pool.shutdown(wait=True)
+        window.model.pool.shutdown(wait=True)
         window.exiting=True
         window.close()
 print('Modern UI smoke passed')

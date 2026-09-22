@@ -11,6 +11,12 @@ from app import Window,Service
 from catalog import Catalog
 from thumbnail_worker import generate
 app=QApplication([])
+def wait_until(predicate,seconds=5):
+    deadline=time.monotonic()+seconds
+    while not predicate() and time.monotonic()<deadline:
+        app.processEvents();time.sleep(.01)
+    assert predicate(),'event loop deadline'
+
 with tempfile.TemporaryDirectory() as tmp:
     p=Path(tmp); (p/'sources').mkdir()
     pages=[Image.new('RGB',(800,600),color) for color in ['red','green','blue','yellow','magenta']]
@@ -23,7 +29,8 @@ with tempfile.TemporaryDirectory() as tmp:
     db.save_thumb(row,out.read_bytes(),[(Path(str(out)+'.pages')/f'{i}.jpg').read_bytes() for i in range(1,6)],5)
     with patch.object(Service,'start'):
         w=Window(db)
-    w.resize(1400,850); w.show(); app.processEvents()
+    w.resize(1400,850); w.show()
+    wait_until(lambda:len(w.model.items)==2)
     with patch('builtins.open',side_effect=AssertionError('source read')),patch('os.stat',side_effect=AssertionError('source stat')):
         w.view.setCurrentIndex(w.model.index(0))
         w.details.memo.setPlainText('保持するメモ')
@@ -33,7 +40,7 @@ with tempfile.TemporaryDirectory() as tmp:
         assert db.rows()[0]['memo']=='保持するメモ'
         assert db.rows()[0]['favorite']==1
         w.favorites.setChecked(True); w.refresh()
-        assert w.model.rowCount()==1
+        wait_until(lambda:w.model.rowCount()==1)
         w.pause_button.setChecked(True); assert w.service.paused
         w.pause_button.setChecked(False); assert not w.service.paused
         key=w.model.key(w.model.items[0]); request=(key,1100,700)
@@ -53,6 +60,7 @@ with tempfile.TemporaryDirectory() as tmp:
             assert any(max(abs(a-b) for a,b in zip(actual,expected))<5 for actual in colors), (expected,sorted(set(colors))[:15])
         assert not any(b.text()=='メタ情報・メモ' for b in w.findChildren(QPushButton))
     w.stats_timer.stop(); w.refresh_timer.stop(); w.details.timer.stop(); w.view.clear_hover()
+    w.db_poll.stop(); w.ui_pool.shutdown(wait=True)
     w.model.pool.shutdown(wait=True)
     w.exiting=True; w.close()
 print('panel, annotations, favorites, pause, all-page hover DB-only: PASS')
