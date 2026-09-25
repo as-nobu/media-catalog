@@ -88,7 +88,15 @@ The app does not modify or delete original files. Missing files are marked for r
 
 **Change paths in the current catalog:** use **Settings → Relocate catalog folders**. Original folders/files are not moved. Both operations create a separate local database copy and retain the previous database; its location is shown at completion. To return to it, select it via **Restore full database**. **Open database folder** shows the active database location.
 
-To transfer notes and tags, open **Settings → Import notes and tags** and choose a database saved with **Back up database** on the other PC. Map source/local folders if paths differ, then preview changes. Tags are combined without duplicates; conflicting notes have a per-file choice. Before applying, a database backup is saved under `backups` in the data folder. Original files, the source database, favorites and thumbnails are unchanged.
+**Share only notes and tags:**
+
+1. On the source PC, choose **Settings → Export notes and tags (compact DB)** and save a new file.
+2. Transfer the `.sqlite3` file to the other PC and select it in **Import notes and tags**.
+3. Map source/local folders if paths differ, then **Preview changes → Apply merge**.
+
+The compact file contains paths, notes and tags for all annotated catalog entries, plus registered folder paths, regardless of the current selection or filters. It excludes thumbnails, image metadata and favorites. No additional packages are required. It cannot be used with **Restore full database**. Existing files are never overwritten.
+
+Full database backups can still be imported. Tags are combined without duplicates; conflicting notes have a per-file choice. Empty notes never erase existing notes, and unregistered files are not added. As before, a **full database backup** is saved under `backups` in the local data folder before applying changes. Original files, the source database, favorites and thumbnails are unchanged.
 
 Search supports space-separated AND terms, `"phrases"`, and `-exclusions`. Scope terms with `name:`, `memo:`, `tag:`, `path:`, `meta:`, `ext:`, or `type:` (example: `cells tag:experiment -failed ext:tif`). Format and sorting controls sit beside search; generation options are under **Settings**. Press `Ctrl+F` to focus search.
 

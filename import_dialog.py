@@ -17,7 +17,7 @@ class ImportDialog(QDialog):
         self.setWindowTitle(tr('メモ・タグの取り込み'))
         self.resize(1000,720)
         layout=QVBoxLayout(self)
-        label=QLabel(tr('空欄は絶対パスで照合。別PCのDBは対応するフォルダを指定してください。'))
+        label=QLabel(tr('軽量DB・通常のDBの両方に対応。空欄は絶対パスで照合。別PCでは対応するフォルダを指定してください。'))
         label.setWordWrap(True); layout.addWidget(label)
         layout.addWidget(QLabel(path))
         mapping=QHBoxLayout(); layout.addLayout(mapping)
