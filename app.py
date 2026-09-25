@@ -718,6 +718,7 @@ class Window(QMainWindow):
         self.list_again = False
         self.regen_futures = []
         self.count_future = None
+        self.annotation_export_future = None
         self.cached_counts = dict(total=0,complete=0,pending=0,timeout=0,errors=0)
         self.db_poll = QTimer(self)
         self.db_poll.timeout.connect(self.poll_database)
@@ -846,9 +847,15 @@ class Window(QMainWindow):
         filters.addWidget(remove_button)
         import_button = QPushButton('メモ・タグの取り込み')
         import_button.clicked.connect(self.import_annotations)
-        filters.addWidget(import_button)
+        annotation_bar=QHBoxLayout()
+        options_layout.addLayout(annotation_bar)
+        annotation_bar.addWidget(import_button)
         restore_bar=QHBoxLayout()
         options_layout.addLayout(restore_bar)
+        self.export_annotations_button=QPushButton('メモ・タグを書き出す（軽量DB）')
+        self.export_annotations_button.clicked.connect(self.export_annotations)
+        annotation_bar.addWidget(self.export_annotations_button)
+        annotation_bar.addStretch()
         for text,callback in [('DB全体を復元',self.restore_catalog),('登録フォルダのパス変更',self.relocate_catalog),('DB保存フォルダを開く',lambda:self.explore(str(Path(self.db.path).parent)))]:
             button=QPushButton(text);button.clicked.connect(callback);restore_bar.addWidget(button)
         restore_bar.addStretch()
@@ -1056,6 +1063,17 @@ class Window(QMainWindow):
         self.list_future=self.ui_pool.submit(load)
 
     def poll_database(self):
+        if self.annotation_export_future is not None and self.annotation_export_future.done():
+            future,self.annotation_export_future=self.annotation_export_future,None
+            self.export_annotations_button.setEnabled(True)
+            try:
+                count=future.result()
+            except Exception as exc:
+                self.statusBar().showMessage(tr('書き出し失敗'))
+                QMessageBox.warning(self,tr('書き出し失敗'),translate_message(str(exc)))
+            else:
+                self.statusBar().showMessage(tr('書き出し完了'))
+                QMessageBox.information(self,tr('書き出し完了'),tr('メモ・タグ: {v0}件\n保存先: {v1}',v0=count,v1=self.annotation_export_path))
         for future in self.regen_futures[:]:
             if future.done():
                 self.regen_futures.remove(future)
@@ -1262,6 +1280,8 @@ class Window(QMainWindow):
         self.prepare_catalog_switch(self.db.path)
 
     def prepare_catalog_switch(self,path):
+        if self.annotation_export_future is not None:
+            QMessageBox.information(self,tr('保存中'),tr('メモ・タグの書き出し完了後に終了してください。'));return
         if getattr(self,'backup_running',False):
             QMessageBox.information(self,tr('保存中'),tr('バックアップ完了後に終了してください。'));return
         if self.details.dirty() and not self.details.save():return
@@ -1278,7 +1298,7 @@ class Window(QMainWindow):
     def import_annotations(self):
         if self.details.dirty() and not self.details.save():
             return
-        path,_=QFileDialog.getOpenFileName(self,tr('メモ・タグの取り込み'),'', 'SQLite (*.sqlite3 *.sqlite *.db);;All files (*)')
+        path,_=QFileDialog.getOpenFileName(self,tr('メモ・タグの取り込み'),'', tr('メモ・タグDB / カタログDB (*.sqlite3 *.sqlite *.db);;すべてのファイル (*)'))
         if not path:
             return
         try:
@@ -1290,6 +1310,22 @@ class Window(QMainWindow):
                 self.refresh()
         except Exception as exc:
             QMessageBox.warning(self,tr('取り込み失敗'),translate_message(str(exc)))
+
+    def export_annotations(self):
+        if self.annotation_export_future is not None or self.exiting:
+            return
+        if self.details.dirty() and not self.details.save():
+            return
+        path,_=QFileDialog.getSaveFileName(self,tr('メモ・タグを書き出す（軽量DB）'),
+            'MediaCatalog-annotations-'+datetime.now().strftime('%Y%m%d-%H%M%S')+'.sqlite3',
+            'SQLite (*.sqlite3)')
+        if not path:
+            return
+        from annotation_import import export_annotations
+        self.annotation_export_path=path
+        self.export_annotations_button.setEnabled(False)
+        self.annotation_export_future=self.ui_pool.submit(export_annotations,self.db,path)
+        self.statusBar().showMessage(tr('メモ・タグを書き出し中…'))
 
     def backup_db(self):
         if getattr(self,'backup_running',False):
@@ -1406,6 +1442,9 @@ class Window(QMainWindow):
 
     def quit_app(self):
         if self.exiting:
+            return
+        if self.annotation_export_future is not None:
+            QMessageBox.information(self,tr('保存中'),tr('メモ・タグの書き出し完了後に終了してください。'))
             return
         if getattr(self,'backup_running',False):
             QMessageBox.information(self,tr('保存中'),tr('バックアップ完了後に終了してください。'))

@@ -5,6 +5,13 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    'メモ・タグを書き出す（軽量DB）': 'Export notes and tags (compact DB)',
+    'メモ・タグを書き出し中…': 'Exporting notes and tags…',
+    'メモ・タグの書き出し完了後に終了してください。': 'Wait for the notes and tags export to finish before quitting.',
+    '書き出し失敗': 'Export failed', '書き出し完了': 'Export complete',
+    'メモ・タグ: {v0}件\n保存先: {v1}': 'Notes and tags: {v0} files\nSaved to: {v1}',
+    'メモ・タグDB / カタログDB (*.sqlite3 *.sqlite *.db);;すべてのファイル (*)': 'Notes and tags DB / Catalog DB (*.sqlite3 *.sqlite *.db);;All files (*)',
+    '軽量DB・通常のDBの両方に対応。空欄は絶対パスで照合。別PCでは対応するフォルダを指定してください。': 'Compact and full databases are supported. Leave folders blank to match absolute paths. For another PC, select corresponding folders.',
     '再生成を予約中…': 'Queuing regeneration…',
     '再生成を予約しました。': 'Regeneration queued.',
     '再生成の予約に失敗しました: ': 'Could not queue regeneration: ',

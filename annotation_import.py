@@ -3,7 +3,40 @@ import ntpath
 import posixpath
 import sqlite3
 import uuid
+from contextlib import closing
 from pathlib import Path
+
+
+def export_annotations(db, path):
+    """Export only notes, tags and matching paths; never read media or thumbnails.
+
+    A read transaction keeps roots and annotations in the same snapshot. The
+    destination is reserved exclusively so an existing DB cannot be overwritten.
+    This is an annotation exchange file, not a restorable full catalog.
+    """
+    target = Path(path)
+    with target.open('xb'):
+        pass
+    try:
+        with db.connect() as source:
+            source.execute('BEGIN')
+            with closing(sqlite3.connect(target)) as destination, destination:
+                destination.execute('CREATE TABLE roots (path TEXT NOT NULL)')
+                destination.execute('CREATE TABLE files (path TEXT NOT NULL, memo TEXT NOT NULL, tags TEXT NOT NULL)')
+                destination.execute('CREATE TABLE annotation_export (version INTEGER NOT NULL)')
+                destination.execute('INSERT INTO annotation_export VALUES (1)')
+                destination.executemany('INSERT INTO roots VALUES (?)',
+                    source.execute('SELECT path FROM roots ORDER BY path'))
+                rows = source.execute('SELECT path,memo,tags FROM files ORDER BY path')
+                destination.executemany('INSERT INTO files VALUES (?,?,?)',
+                    ((r['path'],r['memo'],r['tags']) for r in rows
+                     if r['memo'].strip() or r['tags'].strip()))
+                count = destination.execute('SELECT count(*) FROM files').fetchone()[0]
+        return count
+    except BaseException:
+        # Only remove the new, incomplete export reserved by this operation.
+        target.unlink(missing_ok=True)
+        raise
 
 
 def path_key(path):
