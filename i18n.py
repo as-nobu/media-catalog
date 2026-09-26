@@ -5,6 +5,20 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    '選択画像をPowerPointへ出力': 'Export selected images to PowerPoint',
+    'PowerPoint出力': 'PowerPoint export',
+    '削除候補ではない画像ファイルを選択してください。': 'Select image files that are not marked as missing.',
+    '元画像を取得しています。未キャッシュのファイルはダウンロードします。': 'Retrieving original images. Uncached files will be downloaded.',
+    'キャンセル': 'Cancel', '中止しています…': 'Cancelling…',
+    '取得中 {v0}/{v1}: {v2}': 'Retrieving {v0}/{v1}: {v2}',
+    '画像を準備中: {v0} ({v1}/{v2}ページ)': 'Preparing: {v0} (page {v1}/{v2})',
+    'PPTを保存中…': 'Saving PowerPoint…',
+    'PPT出力がタイムアウトしました。取得・生成タイムアウトの設定を確認してください。': 'PowerPoint export timed out. Check the retrieval/generation timeout setting.',
+    'PPT出力に失敗しました。': 'PowerPoint export failed.',
+    'PPT作成完了: {v0}': 'PowerPoint created: {v0}',
+    'スケール情報がない画像: {v0}枚（スケールバーなし）': '{v0} images have no calibration (no scale bar).',
+    '16bit等から表示用8bitに変換: {v0}枚（画素数は維持）': '{v0} scientific images converted to 8-bit display (pixel dimensions retained).',
+    'PPTを自動で開けません。保存先: {v0}': 'Cannot open PowerPoint automatically. Saved to: {v0}',
     'メモ・タグを書き出す（軽量DB）': 'Export notes and tags (compact DB)',
     'メモ・タグを書き出し中…': 'Exporting notes and tags…',
     'メモ・タグの書き出し完了後に終了してください。': 'Wait for the notes and tags export to finish before quitting.',

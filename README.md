@@ -20,7 +20,7 @@ Use Anaconda Prompt in the app folder instead of `setup.bat`:
 AI previews use pypdfium2; QtPdf is no longer required. Existing environments: run `conda install -c conda-forge "pypdfium2>=4.30,<6"`, restart the app, then regenerate failed AI previews.
 
 ```shell
-conda create -n media-catalog --override-channels -c conda-forge python=3.12 "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
+conda create -n media-catalog --override-channels -c conda-forge python=3.12 "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" "python-pptx>=1.0.2,<2" ffmpeg
 conda activate media-catalog
 python app.py
 ```
@@ -28,7 +28,7 @@ python app.py
 All dependencies are installed with Conda. Do not use `setup.bat` / `start.bat` for this environment; those use a separate venv. For an existing environment, activate it first (for example, `conda activate qt_test`), then run:
 
 ```shell
-conda install --override-channels -c conda-forge "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
+conda install --override-channels -c conda-forge "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" "python-pptx>=1.0.2,<2" ffmpeg
 ```
 
 ### Start at Windows sign-in without a console (Conda)
@@ -81,6 +81,18 @@ Notes, tags and favorites are saved after one second without further edits, and 
 Scans compare file size and modification time. This assumes your cloud client can provide that information without downloading file contents. Changes made on another PC are detected after they reach the local cloud client.
 
 The app does not modify or delete original files. Missing files are marked for review; removing catalog entries or unregistering a folder also removes their saved notes, tags and thumbnails. Opening an original in another app allows editing there.
+
+## Export selected images to PowerPoint
+
+Select images, right-click a selected image and choose **Export selected images to PowerPoint**. Every TIFF page becomes a separate picture. All selected images/pages are arranged on one 16:9 slide, with no 20-page thumbnail limit. Videos, PowerPoint, SVG and Illustrator files are excluded.
+
+- This command reads originals and may download uncached cloud files.
+- Only placement dimensions shrink. Pixel dimensions are retained. Scientific grayscale (including 16-bit) is normalized per page to 8-bit PNG for display, not quantitative analysis. Many images increase PPT size and memory requirements.
+- TIFF standard tags and embedded OME calibration produce editable lines and text boxes, grouped with each image. Images without calibration have no bar and are counted in a completion notice. Print DPI is not necessarily specimen calibration.
+- A PPTX is created in the OS temporary folder (`MediaCatalog-PPT-*`) and opened in the default application. Use **Save As** in PowerPoint to keep it. The app does not delete successful exports on exit, but OS temporary-file cleanup may remove them.
+- Cancel from the progress dialog. The retrieval/generation timeout covers the **entire export**, including downloads and saving. The maximum-pixel setting applies per page. Failed/cancelled exports do not open a PPT or change catalog generation status.
+
+Existing environments: install `conda install -c conda-forge "python-pptx>=1.0.2,<2"`. Original files and the database are unchanged. Automatic picture compression is disabled in the generated deck; subsequent PowerPoint save settings may still compress images. Resize the image/bar group proportionally to retain the calibration.
 
 ## Import and search
 

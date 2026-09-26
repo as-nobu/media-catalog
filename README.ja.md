@@ -20,7 +20,7 @@
 AIのサムネイル生成にはpypdfium2を使用します（QtPdfは不要）。既存環境では `conda install -c conda-forge "pypdfium2>=4.30,<6"` を実行し、アプリを再起動して、エラーになったAIを再生成してください。
 
 ```shell
-conda create -n media-catalog --override-channels -c conda-forge python=3.12 "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
+conda create -n media-catalog --override-channels -c conda-forge python=3.12 "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" "python-pptx>=1.0.2,<2" ffmpeg
 conda activate media-catalog
 python app.py
 ```
@@ -28,7 +28,7 @@ python app.py
 すべてCondaで導入します。`setup.bat`・`start.bat` は別のvenv用なので、Conda環境では使いません。既存の環境を使う場合は、対象環境を有効にして次を実行してください（例：`conda activate qt_test`）。
 
 ```shell
-conda install --override-channels -c conda-forge "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" ffmpeg
+conda install --override-channels -c conda-forge "pyside6>=6.7,<7" "pillow>=10.4,<13" "numpy>=1.26,<3" "msoffcrypto-tool>=5.4,<6" "pywin32>=306" "pypdfium2>=4.30,<6" "python-pptx>=1.0.2,<2" ffmpeg
 ```
 
 ### コンソールなしでWindowsログオン時に起動（Conda）
@@ -81,6 +81,18 @@ sh.Run command, 0, False
 更新確認にはファイルサイズ・更新日時を使います。クラウドクライアントが本体を取得せずにこの情報を返せることが前提です。別PCの変更は、このPCへ同期された後に検出します。
 
 アプリは元ファイルを変更・削除しません。見つからなくなったファイルは削除候補として確認できます。登録解除・カタログからの削除では、関連するメモ・タグ・サムネイルも削除されます。元ファイルを外部アプリで開いた場合は、そちらで編集・保存できます。
+
+## 選択画像をPowerPointへ出力
+
+画像を複数選択し、選択中の画像を右クリック→「選択画像をPowerPointへ出力」を選びます。TIFFは**全ページ**を個別画像として展開し、選択画像と合わせて1枚の16:9スライドに配置します。この出力にはサムネイルの20ページ上限を適用しません。動画・PPT・SVG・Illustratorは対象外です。
+
+- 元画像を読み込むため、Box等の未キャッシュファイルはダウンロードします。
+- 配置寸法だけを縮小し、縦横の画素数を維持します。16bit等の科学画像はページごとに明るさを正規化して8bit表示用PNGに変換します（定量解析用ではありません）。画像数が多いとPPT容量・必要メモリも増えます。
+- TIFFの標準タグ・OME情報からスケールを読み、線とテキストボックスでスケールバーを作ります。画像とグループ化され、編集できます。情報がない場合は付けず、完了時に件数を通知します。印刷用DPIと顕微鏡の校正値の違いにご注意ください。
+- PPTXはOSの一時フォルダ（`MediaCatalog-PPT-*`）に作り、既定アプリで開きます。残したい場合はPowerPointで「名前を付けて保存」してください。成功したPPTはアプリ終了時には削除しませんが、OSの一時ファイル整理で消える可能性があります。
+- 進捗画面から中止できます。「取得・生成タイムアウト」は、ダウンロードからPPT保存までの**出力全体**に適用します。「最大画素数」は1ページごとに適用します。失敗・中止時はPPTを開かず、カタログの生成状態も変更しません。
+
+既存環境には `conda install -c conda-forge "python-pptx>=1.0.2,<2"` を追加してください。元画像やDBは変更しません。生成時の画像圧縮は無効にしますが、その後のPowerPointでの保存設定によっては圧縮される場合があります。スケールを保つには画像とバーをグループのまま縦横比を維持して拡大・縮小してください。
 
 ## 取り込み・検索
 
