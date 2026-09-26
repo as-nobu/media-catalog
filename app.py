@@ -719,6 +719,7 @@ class Window(QMainWindow):
         self.regen_futures = []
         self.count_future = None
         self.annotation_export_future = None
+        self.ppt_export_dialog = None
         self.cached_counts = dict(total=0,complete=0,pending=0,timeout=0,errors=0)
         self.db_poll = QTimer(self)
         self.db_poll.timeout.connect(self.poll_database)
@@ -1363,10 +1364,14 @@ class Window(QMainWindow):
         if not index.isValid():
             return
         row = dict(self.model.items[index.row()])
+        selected = self.view.selectedIndexes()
+        export_rows = [dict(self.model.items[i.row()]) for i in selected] if index in selected else [row]
         menu = QMenu(self)
         open_action = menu.addAction(tr('元ファイルを開く'))
         explore_action = menu.addAction(tr('エクスプローラーで保存フォルダを開く'))
         retry_action = menu.addAction(tr('再スキャン・再生成'))
+        ppt_action = menu.addAction(tr('選択画像をPowerPointへ出力'))
+        ppt_action.setEnabled(bool(export_rows) and all(r['kind']=='image' and not r['missing'] for r in export_rows))
         chosen = menu.exec(self.view.viewport().mapToGlobal(position))
         if chosen==open_action:
             QDesktopServices.openUrl(QUrl.fromLocalFile(row['path']))
@@ -1376,6 +1381,37 @@ class Window(QMainWindow):
             self.queue_regeneration([row['id']])
             self.scan()
             self.schedule_refresh()
+        elif chosen==ppt_action:
+            self.export_images_to_ppt(export_rows)
+
+    def export_images_to_ppt(self, rows):
+        if not rows or self.exiting:
+            return
+        if any(r['kind']!='image' or r['missing'] for r in rows):
+            QMessageBox.information(self,tr('PowerPoint出力'),tr('削除候補ではない画像ファイルを選択してください。'))
+            return
+        from ppt_export_dialog import PptExportDialog
+        dialog = PptExportDialog([r['path'] for r in rows],self.service.timeout,self.service.max_image_mp,self)
+        self.ppt_export_dialog = dialog
+        try:
+            if dialog.exec()!=QDialog.DialogCode.Accepted:
+                if dialog.error:
+                    QMessageBox.warning(self,tr('PowerPoint出力'),translate_message(dialog.error))
+                return
+            info = dialog.result_info
+            self.statusBar().showMessage(tr('PPT作成完了: {v0}',v0=str(dialog.output)))
+            notices = []
+            if info['uncalibrated']:
+                notices.append(tr('スケール情報がない画像: {v0}枚（スケールバーなし）',v0=len(info['uncalibrated'])))
+            if info['normalized']:
+                notices.append(tr('16bit等から表示用8bitに変換: {v0}枚（画素数は維持）',v0=info['normalized']))
+            if notices:
+                QMessageBox.information(self,tr('PowerPoint出力'),'\n'.join(notices))
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(dialog.output))):
+                QMessageBox.information(self,tr('PowerPoint出力'),tr('PPTを自動で開けません。保存先: {v0}',v0=str(dialog.output)))
+        finally:
+            self.ppt_export_dialog = None
+            dialog.deleteLater()
 
     def folder_menu(self,position):
         item = self.tree.itemAt(position)
@@ -1442,6 +1478,10 @@ class Window(QMainWindow):
 
     def quit_app(self):
         if self.exiting:
+            return
+        if self.ppt_export_dialog is not None and not self.ppt_export_dialog._finished:
+            self.ppt_export_dialog.reject()
+            QTimer.singleShot(100,self.quit_app)
             return
         if self.annotation_export_future is not None:
             QMessageBox.information(self,tr('保存中'),tr('メモ・タグの書き出し完了後に終了してください。'))
