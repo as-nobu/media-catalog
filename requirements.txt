@@ -1,6 +1,7 @@
 PySide6>=6.7,<7
 Pillow>=10.4,<13
 numpy>=1.26,<3
+opencv-python-headless>=4.8,<5
 msoffcrypto-tool>=5.4,<6
 pywin32>=306; sys_platform == 'win32'
 pypdfium2>=4.30,<6

@@ -30,6 +30,7 @@ from qt_i18n import install_dialog_translator
 
 class Service(QThread):
     changed = Signal()
+    thumbnail_saved = Signal(str)
     message = Signal(str)
     copy_ready = Signal(str)
     progress = Signal(object)
@@ -162,9 +163,11 @@ class Service(QThread):
                         if not isinstance(count,int) or count<0 or (count==0 and not (job['kind']=='powerpoint' or (job['kind'] in EMPTY_FILE_KINDS and job['size']==0))):
                             raise ValueError('ページ数が不正です。')
                         folder = Path(str(out)+'.pages')
-                        self.db.save_thumb(job,out.read_bytes() if count else None,
+                        saved = self.db.save_thumb(job,out.read_bytes() if count else None,
                             pages=((folder/f'{i}.jpg').read_bytes() for i in range(1,min(count,MAX_PAGE_THUMBNAILS)+1)),page_count=count,
                             metadata=manifest.get('metadata'))
+                        if saved and count:
+                            self.thumbnail_saved.emit(job['registration_uid'])
                 else:
                     self.request_scan()
             self.message.emit('待機中：サムネイル生成完了')
@@ -720,6 +723,9 @@ class Window(QMainWindow):
         self.count_future = None
         self.annotation_export_future = None
         self.ppt_export_dialog = None
+        self.image_search_dialog = None
+        self.screen_capture = None
+        self.pending_search_selection = None
         self.cached_counts = dict(total=0,complete=0,pending=0,timeout=0,errors=0)
         self.db_poll = QTimer(self)
         self.db_poll.timeout.connect(self.poll_database)
@@ -763,6 +769,9 @@ class Window(QMainWindow):
         self.search.setPlaceholderText('検索：キーワード、tag:タグ、ext:tif、-除外')
         self.search.setClearButtonEnabled(True)
         filters.addWidget(self.search,1)
+        self.image_search_button = QPushButton('画像検索')
+        self.image_search_button.clicked.connect(self.start_image_search)
+        filters.addWidget(self.image_search_button)
         self.kind_filter = QComboBox()
         self.sort_order = QComboBox()
         for label,value in [('すべての形式',''),('画像','image'),('動画','video'),('PowerPoint','powerpoint'),('SVG','svg'),('Illustrator','illustrator')]:
@@ -865,6 +874,9 @@ class Window(QMainWindow):
         self.progress_label.setObjectName('progress')
         self.progress_label.setWordWrap(True)
         layout.addWidget(self.progress_label)
+        from feature_indexing import FeatureIndexPanel
+        self.feature_index = FeatureIndexPanel(db, self)
+        layout.addWidget(self.feature_index)
         self.active_jobs = []
         self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self.update_progress)
@@ -943,6 +955,7 @@ class Window(QMainWindow):
         self.service.progress.connect(self.receive_progress)
         self.service.message.connect(lambda msg:self.statusBar().showMessage(translate_message(msg)))
         self.service.copy_ready.connect(self.open_local_copy)
+        self.service.thumbnail_saved.connect(self.feature_index.thumbnail_saved)
         self.generate.toggled.connect(self.settings_changed)
         self.auto_scan.toggled.connect(self.settings_changed)
         self.interval.valueChanged.connect(self.settings_changed)
@@ -964,12 +977,64 @@ class Window(QMainWindow):
         self.language_combo.currentIndexChanged.connect(self.change_language)
         self.refresh()
         self.service.start()
+        QTimer.singleShot(0, self.feature_index.start)
 
     def clear_filters(self):
         self.search.clear()
         self.kind_filter.setCurrentIndex(0)
         for checkbox in (self.favorites,self.missing,self.timeouts,self.errors):
             checkbox.setChecked(False)
+        self.schedule_refresh()
+
+    def start_image_search(self):
+        if self.exiting or self.screen_capture is not None:
+            return
+        if self.image_search_dialog is not None and self.image_search_dialog.worker is not None:
+            self.image_search_dialog.raise_()
+            return
+        from screen_capture import ScreenCapture
+        self.view.clear_hover()
+        self.image_search_button.setEnabled(False)
+        capture = ScreenCapture(self)
+        self.screen_capture = capture
+        capture.captured.connect(self.image_captured)
+        capture.cancelled.connect(self.capture_finished)
+        capture.failed.connect(self.capture_failed)
+        capture.start()
+
+    def capture_finished(self):
+        capture,self.screen_capture = self.screen_capture,None
+        self.image_search_button.setEnabled(True)
+        if capture is not None:
+            capture.deleteLater()
+
+    def capture_failed(self,message):
+        self.capture_finished()
+        QMessageBox.warning(self,tr('画像検索'),message)
+
+    def image_captured(self,image):
+        self.capture_finished()
+        from image_search_dialog import ImageSearchDialog
+        if self.image_search_dialog is None:
+            dialog = ImageSearchDialog(self.db,image,
+                [r['registration_uid'] for r in self.model.items],self)
+            self.image_search_dialog = dialog
+            dialog.capture_requested.connect(self.start_image_search)
+            dialog.catalog_requested.connect(self.select_search_result)
+            dialog.destroyed.connect(lambda:setattr(self,'image_search_dialog',None))
+        else:
+            dialog = self.image_search_dialog
+            dialog.set_query(image)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def select_search_result(self,uid):
+        # Navigation is metadata-only; opening the original remains explicit.
+        self.pending_search_selection = uid
+        self.clear_filters()
+        if self.tree.topLevelItemCount():
+            self.tree.setCurrentItem(self.tree.topLevelItem(0))
         self.schedule_refresh()
 
     def search_help(self):
@@ -992,7 +1057,7 @@ class Window(QMainWindow):
         self.setWindowTitle(tr('Media Catalog — 画像・動画・PowerPoint'))
         self.view.clear_hover()
         for widget in self.findChildren(QWidget):
-            if isinstance(widget,(QLabel,QPushButton,QCheckBox)) and widget not in (self.view.popup,self.details.status,self.count,self.progress_label,self.pause_button):
+            if isinstance(widget,(QLabel,QPushButton,QCheckBox)) and widget not in (self.view.popup,self.details.status,self.count,self.progress_label,self.pause_button,self.feature_index.label,self.feature_index.notice):
                 self._translate_property(widget,'i18nText',widget.text,widget.setText)
             if isinstance(widget,QLineEdit):
                 self._translate_property(widget,'i18nPlaceholder',widget.placeholderText,widget.setPlaceholderText)
@@ -1015,6 +1080,7 @@ class Window(QMainWindow):
             self.details.info.setPlainText(tr('ファイルを選択してください。'))
         self.pause_button.setText(tr('生成を再開') if self.service.paused else tr('生成を一時停止'))
         self.update_progress()
+        self.feature_index.retranslate()
         if refresh:
             self._tree_signature = None
             self.refresh()
@@ -1168,6 +1234,14 @@ class Window(QMainWindow):
                 self.details.set_row(None)
         self.view.selectionModel().blockSignals(False)
         self.count.setText(tr('{v0:,} 件 / 削除候補 {v1:,} / タイムアウト {v2:,}',v0=len(rows),v1=sum(r['missing'] for r in rows),v2=sum(r['timed_out'] for r in rows)))
+        if self.pending_search_selection is not None:
+            position = next((i for i,r in enumerate(rows)
+                             if r['registration_uid']==self.pending_search_selection),None)
+            if position is not None:
+                index = self.model.index(position)
+                self.view.setCurrentIndex(index)
+                self.view.scrollTo(index)
+            self.pending_search_selection = None
 
     def settings_changed(self,*args):
         self.service.scan_enabled=self.auto_scan.isChecked()
@@ -1479,6 +1553,14 @@ class Window(QMainWindow):
     def quit_app(self):
         if self.exiting:
             return
+        if self.screen_capture is not None:
+            self.screen_capture.finish()
+        if self.image_search_dialog is not None:
+            running = self.image_search_dialog.worker is not None
+            self.image_search_dialog.close()
+            if running:
+                QTimer.singleShot(100,self.quit_app)
+                return
         if self.ppt_export_dialog is not None and not self.ppt_export_dialog._finished:
             self.ppt_export_dialog.reject()
             QTimer.singleShot(100,self.quit_app)
@@ -1498,13 +1580,14 @@ class Window(QMainWindow):
         self.refresh_timer.stop()
         self.stats_timer.stop()
         self.service.stop()
+        self.feature_index.shutdown()
         # Keep Qt running until worker has stopped; never destroy a live QThread.
         self.shutdown_timer = QTimer(self)
         self.shutdown_timer.timeout.connect(self.finish_quit)
         self.shutdown_timer.start(100)
 
     def finish_quit(self):
-        if not self.service.isRunning() and not self.regen_futures and self.list_future is None and self.count_future is None:
+        if not self.service.isRunning() and not self.feature_index.worker.isRunning() and not self.regen_futures and self.list_future is None and self.count_future is None:
             self.shutdown_timer.stop()
             self.db_poll.stop()
             self.ui_pool.shutdown(wait=False,cancel_futures=True)

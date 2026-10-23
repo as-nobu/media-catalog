@@ -40,12 +40,14 @@ with tempfile.TemporaryDirectory() as temp:
     assert 'timed out' in translate_message('取得・生成が1800秒でタイムアウトしました。再試行するまで保留します。')
     assert w.tray.contextMenu().actions()[-1].text()=='Quit'
     w.details.save()
+    w.feature_index.shutdown();assert w.feature_index.worker.wait(10000)
     w.details.timer.stop();w.stats_timer.stop();w.refresh_timer.stop();w.db_poll.stop()
     w.ui_pool.shutdown(wait=True);w.model.pool.shutdown()
     w.exiting=True;w.close()
     with patch.object(Service,'start'):
         restored=Window(db)
     assert get_language()=='en' and restored.language_combo.currentData()=='en'
+    restored.feature_index.shutdown();assert restored.feature_index.worker.wait(10000)
     restored.details.timer.stop();restored.stats_timer.stop();restored.refresh_timer.stop();restored.db_poll.stop()
     restored.ui_pool.shutdown(wait=True);restored.model.pool.shutdown()
     restored.exiting=True;restored.close()

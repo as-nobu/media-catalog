@@ -1,5 +1,10 @@
 # Media Catalog
 
+**Search by image:** click **Image search** beside the text search field and
+select a screen region to find similar cached images and matching pages.
+Install OpenCV first. See [image search setup and usage](IMAGE_SEARCH.md),
+including optional local DINOv2 support. Search never retrieves source files.
+
 [日本語](README.ja.md) · English
 
 A Windows app for browsing images, videos, TIFFs, PowerPoint, SVG and PDF-compatible Illustrator files as a local thumbnail catalog.

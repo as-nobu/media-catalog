@@ -82,6 +82,14 @@ class Catalog:
                 file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
                 page_number INTEGER NOT NULL, data BLOB NOT NULL,
                 PRIMARY KEY(file_id,page_number))''')
+            # Derived solely from saved thumbnails. Adding the search schema
+            # must not invalidate thumbnails or schedule source downloads.
+            c.execute('''CREATE TABLE IF NOT EXISTS visual_features (
+                file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                page_number INTEGER NOT NULL, engine TEXT NOT NULL,
+                registration_uid TEXT NOT NULL, revision INTEGER NOT NULL,
+                vectors BLOB, local_data BLOB, error TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(file_id,page_number,engine))''')
             if not c.execute("SELECT 1 FROM settings WHERE key='page_limit_20_v1'").fetchone():
                 c.execute('DELETE FROM page_thumbs WHERE page_number>?',(MAX_PAGE_THUMBNAILS,))
                 c.execute("INSERT INTO settings VALUES ('page_limit_20_v1','1')")
@@ -403,6 +411,7 @@ class Catalog:
                 WHERE id=? AND registration_uid=? AND path=? AND missing=0 AND size=? AND mtime_ns=?''',
                 (job['size'],job['mtime_ns'],page_count,job['id'],job['registration_uid'],job['path'],job['size'],job['mtime_ns']))
             if result.rowcount:
+                c.execute('DELETE FROM visual_features WHERE file_id=?',(job['id'],))
                 c.execute('UPDATE files SET metadata_json=? WHERE id=?',
                           (json.dumps(metadata or {},ensure_ascii=False),job['id']))
                 if page_count:
