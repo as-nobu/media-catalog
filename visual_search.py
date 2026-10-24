@@ -10,6 +10,7 @@ import heapq
 import io
 import json
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,8 @@ import numpy as np
 from PIL import Image, ImageOps
 
 FEATURE_VERSION = 'visual-v1'
+LOCAL_VERSION = 'sift-v1'
+WRITE_BATCH = 24
 MAX_FEATURES = 600
 MAX_PREVIEW_PIXELS = 16_000_000
 _INDEX_LOCK = threading.RLock()
@@ -169,16 +172,17 @@ class DinoEncoder:
         self.stop = stop
 
     def encode(self, image, multiple=True):
-        result = []
-        # Preserve every region instead of the model's default centre crop.
-        for part in (regions(image) if multiple else [image]):
-            check_cancel(self.stop)
-            inputs = self.processor(images=part.resize((224, 224)), return_tensors='pt',
-                                    do_resize=False, do_center_crop=False)
-            with self.torch.inference_mode():
-                vector = self.model(**inputs).last_hidden_state[:, 0].float().cpu().numpy()[0]
-            result.append(unit(vector))
-        return np.stack(result).astype(np.float32)
+        # Same five regions, resize, FP32 weights and CLS vectors as visual-v1.
+        # Batch only one page (at most five inputs), bounding peak memory and
+        # cancellation latency without changing the cache/model fingerprint.
+        check_cancel(self.stop)
+        parts = [part.resize((224, 224)) for part in (regions(image) if multiple else [image])]
+        inputs = self.processor(images=parts, return_tensors='pt',
+                                do_resize=False, do_center_crop=False)
+        with self.torch.inference_mode():
+            vectors = self.model(**inputs).last_hidden_state[:, 0].float().cpu().numpy()
+        check_cancel(self.stop)
+        return unit(vectors).astype(np.float32)
 
 
 # Page thumbnails are authoritative. Legacy DBs with only thumbs get page 1.
@@ -209,53 +213,124 @@ class SearchIndex:
     def __init__(self, db):
         self.db = db
 
-    def pending(self, key, uid=None):
+    def thumbnail_uids(self):
+        """Files with saved previews, without reading any image bytes."""
+        with self.db.connect() as c:
+            return {row[0] for row in c.execute('WITH pages AS ('+PAGE_KEYS+') '
+                                                'SELECT DISTINCT registration_uid FROM pages')}
+
+    @staticmethod
+    def _scope(uid=None, uids=None):
+        if uid is not None and uids is not None:
+            raise ValueError('Specify uid or uids, not both')
+        if uid is not None:
+            return ' AND p.registration_uid=?', (uid,)
+        if uids is not None:
+            ids = tuple(dict.fromkeys(uids))
+            return (' AND p.registration_uid IN (' + ','.join('?' for _ in ids) + ')', ids) if ids else (' AND 0', ())
+        return '', ()
+
+    def pending(self, key, uid=None, *, uids=None):
         """Metadata-only backlog, counted in saved pages (not source files).
 
         A corrupt thumbnail's recorded error counts as an attempted page, so it
         does not cause the same unproductive confirmation at every startup.
         """
+        scope, args = self._scope(uid, uids)
         with self.db.connect() as c:
             rows = c.execute('''WITH pages AS ('''+PAGE_KEYS+''')
                 SELECT p.registration_uid,count(*) AS n FROM pages p
                 LEFT JOIN visual_features v ON v.file_id=p.file_id
                   AND v.page_number=p.page_number AND v.engine=?
                   AND v.registration_uid=p.registration_uid AND v.revision=p.revision
-                WHERE v.file_id IS NULL ''' + ('AND p.registration_uid=? ' if uid is not None else '') +
-                'GROUP BY p.registration_uid', (key, uid) if uid is not None else (key,)).fetchall()
+                WHERE v.file_id IS NULL ''' + scope +
+                ' GROUP BY p.registration_uid', (key, *args)).fetchall()
         return {r['registration_uid']: r['n'] for r in rows}
 
-    def build(self, encoder, stop=lambda: False, progress=lambda *a: None, rebuild=False, uid=None):
+    def build(self, encoder, stop=lambda: False, progress=lambda *a: None, rebuild=False, uid=None,
+              *, uids=None, file_progress=lambda uid: None):
         with index_lock(stop):
-            return self._build(encoder, stop, progress, rebuild, uid)
+            return self._build(encoder, stop, progress, rebuild, uid, uids, file_progress)
 
-    def _build(self, encoder, stop, progress, rebuild, uid):
+    def _build(self, encoder, stop, progress, rebuild, uid, uids, file_progress):
         key = encoder.key
-        scope = ' AND p.registration_uid=?' if uid is not None else ''
-        args = (uid,) if uid is not None else ()
-        with self.db.connect() as c:
-            if rebuild:
+        uids = tuple(uids) if uids is not None else None
+        scope, args = self._scope(uid, uids)
+        if rebuild:
+            with self.db.connect() as c:
                 c.execute('DELETE FROM visual_features WHERE engine=?' +
-                          (' AND registration_uid=?' if uid is not None else ''), (key, *args))
-            total = c.execute('WITH pages AS ('+PAGE_KEYS+') SELECT count(*) FROM pages p WHERE 1=1'+scope, args).fetchone()[0]
+                          scope.replace('p.registration_uid', 'registration_uid'), (key, *args))
+        remaining = self.pending(key, uid, uids=uids)
+        total = sum(remaining.values())
+        # Already cached files need no thumbnail reads and still count as done.
+        for cached_uid in ((uids if uids is not None else (uid,)) if uid is not None or uids is not None else ()):
+            if cached_uid not in remaining:
+                file_progress(cached_uid)
+        if not total:
+            return 0
         done = new = 0
         after = (0, 0)
-        while True:
-            check_cancel(stop)
+        buffered = []
+        last_save = time.monotonic()
+
+        def flush():
+            nonlocal buffered, new, last_save
+            if not buffered:
+                return
+            batch, buffered = buffered, []
+            saved_uids = []
+            # No write transaction is held while decoding or running inference.
             with self.db.connect() as c:
-                rows = c.execute('''WITH pages AS ('''+PAGES+''')
-                    SELECT p.*,v.file_id AS indexed_id,v.revision AS indexed_revision,
-                           v.registration_uid AS indexed_uid
-                    FROM pages p LEFT JOIN visual_features v
-                      ON v.file_id=p.file_id AND v.page_number=p.page_number AND v.engine=?
-                    WHERE (p.file_id,p.page_number)>(?,?)''' + scope + '''
-                    ORDER BY p.file_id,p.page_number LIMIT 24''', (key, *after, *args)).fetchall()
-            if not rows:
-                break
-            for row in rows:
+                for row, vectors, local, error in batch:
+                    identity = (row['file_id'], row['registration_uid'], row['revision'])
+                    if local is not None:
+                        c.execute('''INSERT OR REPLACE INTO visual_local_features
+                            (file_id,page_number,version,registration_uid,revision,data)
+                            SELECT id,?,?,registration_uid,revision,? FROM files
+                            WHERE id=? AND registration_uid=? AND revision=?''',
+                            (row['page_number'], LOCAL_VERSION, local, *identity))
+                    saved = c.execute('''INSERT OR REPLACE INTO visual_features
+                        (file_id,page_number,engine,registration_uid,revision,vectors,local_data,error)
+                        SELECT id,?,?,registration_uid,revision,?,NULL,? FROM files
+                        WHERE id=? AND registration_uid=? AND revision=?''',
+                        (row['page_number'], key, vectors, error, *identity))
+                    new += saved.rowcount
+                    if saved.rowcount:
+                        saved_uids.append(row['registration_uid'])
+            # Report files only after their last page has actually committed.
+            for saved_uid in saved_uids:
+                if remaining.get(saved_uid, 0) > 0:
+                    remaining[saved_uid] -= 1
+                    if remaining[saved_uid] == 0:
+                        file_progress(saved_uid)
+            last_save = time.monotonic()
+
+        try:
+            while True:
                 check_cancel(stop)
-                after = (row['file_id'], row['page_number'])
-                if row['indexed_id'] is None or row['indexed_revision'] != row['revision'] or row['indexed_uid'] != row['registration_uid']:
+                with self.db.connect() as c:
+                    rows = c.execute('''WITH pages AS ('''+PAGES+''')
+                        SELECT p.*,l.data AS shared_local,
+                          CASE WHEN l.data IS NULL THEN
+                            (SELECT old.local_data FROM visual_features old
+                             WHERE old.file_id=p.file_id AND old.page_number=p.page_number
+                               AND old.registration_uid=p.registration_uid AND old.revision=p.revision
+                               AND old.engine LIKE ? AND old.local_data IS NOT NULL LIMIT 1)
+                          END AS legacy_local
+                        FROM pages p LEFT JOIN visual_features v
+                          ON v.file_id=p.file_id AND v.page_number=p.page_number AND v.engine=?
+                          AND v.registration_uid=p.registration_uid AND v.revision=p.revision
+                        LEFT JOIN visual_local_features l
+                          ON l.file_id=p.file_id AND l.page_number=p.page_number AND l.version=?
+                          AND l.registration_uid=p.registration_uid AND l.revision=p.revision
+                        WHERE v.file_id IS NULL AND (p.file_id,p.page_number)>(?,?)''' + scope + '''
+                        ORDER BY p.file_id,p.page_number LIMIT ?''',
+                        (FEATURE_VERSION+':%', key, LOCAL_VERSION, *after, *args, WRITE_BATCH)).fetchall()
+                if not rows:
+                    break
+                for row in rows:
+                    check_cancel(stop)
+                    after = (row['file_id'], row['page_number'])
                     # Decode failures belong to this cached page. Model/DB failures
                     # must abort, not poison every page's cache as an image error.
                     try:
@@ -264,18 +339,24 @@ class SearchIndex:
                         vectors, local, error = None, None, str(exc)[:500]
                     else:
                         vectors = pack(vectors=encoder.encode(image))
-                        local = pack(**local_features(image))
+                        # Legacy inline SIFT remains untouched. Copy it lazily
+                        # only when this page needs a missing engine; otherwise
+                        # new pages share one SIFT record across both engines.
+                        local = None if row['shared_local'] is not None else row['legacy_local']
+                        if row['shared_local'] is None and local is None:
+                            local = pack(**local_features(image))
                         error = ''
                     check_cancel(stop)
-                    with self.db.connect() as c:
-                        saved = c.execute('''INSERT OR REPLACE INTO visual_features
-                            (file_id,page_number,engine,registration_uid,revision,vectors,local_data,error)
-                            SELECT id,?,?,registration_uid,revision,?,?,? FROM files
-                            WHERE id=? AND registration_uid=? AND revision=?''',
-                            (row['page_number'],key,vectors,local,error,row['file_id'],row['registration_uid'],row['revision']))
-                        new += saved.rowcount
-                done += 1
-                progress('index', done, total)
+                    buffered.append((row, vectors, local, error))
+                    done += 1
+                    if len(buffered) >= WRITE_BATCH or time.monotonic() - last_save >= 1.0:
+                        flush()
+                    progress('index', done, total)
+                flush()
+        finally:
+            # Cancellation/model errors keep completed pages, including a short
+            # final batch. The in-flight page is retried on the next run.
+            flush()
         return new
 
     def search(self, query_blob, encoder=None, stop=lambda: False, progress=lambda *a: None,
@@ -327,15 +408,18 @@ class SearchIndex:
         for n, (similarity, fid, page, uid, revision) in enumerate(ranking, 1):
             check_cancel(stop)
             with self.db.connect() as c:
-                row = c.execute('''SELECT v.local_data FROM visual_features v JOIN files f ON f.id=v.file_id
+                row = c.execute('''SELECT coalesce(v.local_data,l.data) AS local_data
+                    FROM visual_features v JOIN files f ON f.id=v.file_id
                     AND f.registration_uid=v.registration_uid AND f.revision=v.revision
+                    LEFT JOIN visual_local_features l ON l.file_id=v.file_id AND l.page_number=v.page_number
+                    AND l.registration_uid=v.registration_uid AND l.revision=v.revision AND l.version=?
                     WHERE v.file_id=? AND v.page_number=? AND v.engine=? AND v.registration_uid=? AND v.revision=?''',
-                    (fid,page,encoder.key,uid,revision)).fetchone()
+                    (LOCAL_VERSION,fid,page,encoder.key,uid,revision)).fetchone()
             if row is None:
                 continue
             try:
                 geometry, polygon, inliers = match_geometry(qlocal, unpack(row['local_data']))
-            except (ValueError, KeyError, opencv().error):
+            except (ValueError, KeyError, TypeError, opencv().error):
                 geometry, polygon, inliers = 0., None, 0
             # Geometrically verified copies first, then visual neighbours. This
             # score is only a ranking value, never a probability or identity proof.

@@ -90,6 +90,14 @@ class Catalog:
                 registration_uid TEXT NOT NULL, revision INTEGER NOT NULL,
                 vectors BLOB, local_data BLOB, error TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY(file_id,page_number,engine))''')
+            # New features share SIFT; keep all legacy inline blobs unchanged.
+            # Creating this empty table does not rescan or re-index old images.
+            c.execute('''CREATE TABLE IF NOT EXISTS visual_local_features (
+                file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                page_number INTEGER NOT NULL, version TEXT NOT NULL,
+                registration_uid TEXT NOT NULL, revision INTEGER NOT NULL,
+                data BLOB NOT NULL,
+                PRIMARY KEY(file_id,page_number,version))''')
             if not c.execute("SELECT 1 FROM settings WHERE key='page_limit_20_v1'").fetchone():
                 c.execute('DELETE FROM page_thumbs WHERE page_number>?',(MAX_PAGE_THUMBNAILS,))
                 c.execute("INSERT INTO settings VALUES ('page_limit_20_v1','1')")
@@ -412,6 +420,7 @@ class Catalog:
                 (job['size'],job['mtime_ns'],page_count,job['id'],job['registration_uid'],job['path'],job['size'],job['mtime_ns']))
             if result.rowcount:
                 c.execute('DELETE FROM visual_features WHERE file_id=?',(job['id'],))
+                c.execute('DELETE FROM visual_local_features WHERE file_id=?',(job['id'],))
                 c.execute('UPDATE files SET metadata_json=? WHERE id=?',
                           (json.dumps(metadata or {},ensure_ascii=False),job['id']))
                 if page_count:

@@ -6,6 +6,22 @@ UNITS = {'µm':1,'μm':1,'um':1,'nm':.001,'mm':1000,'cm':10000,'m':1000000,
          'pm':.000001,'Å':.0001,'in':25400}
 
 
+def ome_unit_factor(unit):
+    """Recognize UTF-8 units returned as Latin-1 text by Pillow's TIFF reader.
+
+    Decode only an unrecognized unit, not the whole XML: other attributes may
+    already contain valid Unicode. Only known units are accepted after repair.
+    """
+    factor = UNITS.get(unit)
+    if factor is not None:
+        return factor
+    try:
+        repaired = unit.encode('latin-1').decode('utf-8')
+    except UnicodeError:
+        return None
+    return UNITS.get(repaired)
+
+
 def positive(value):
     try:
         value=float(value)
@@ -27,7 +43,7 @@ def ome_scales(description, count):
             scale={}
             for axis in ('X','Y'):
                 value=positive(pixels.get('PhysicalSize'+axis))
-                factor=UNITS.get(pixels.get('PhysicalSize'+axis+'Unit','µm'))
+                factor=ome_unit_factor(pixels.get('PhysicalSize'+axis+'Unit','\u00b5m'))
                 scale[axis.lower()]=positive(value*factor) if value and factor else None
             if not any(scale.values()): continue
             scale['source']='OME-TIFF'

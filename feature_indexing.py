@@ -40,18 +40,37 @@ class FeatureWorker(QThread):
         self.model_key = None
         self.encoders = {}
         self.download_failures = {}
+        self.job_active = False
+        self.job_serial = 0
+        self.job_uids = set()
+        self.job_done = set()
+        self.active_uids = set()
 
-    def enqueue(self, uids):
+    def start_job(self):
+        # Called with condition held. A job spans all internal 32-file batches.
+        self.job_active = True
+        self.job_serial += 1
+        self.job_uids.clear()
+        self.job_done.clear()
+
+    def enqueue(self, uids, cached_uids=()):
         with self.condition:
             if not self.stopping:
+                if not self.job_active:
+                    self.start_job()
+                self.job_uids.update(cached_uids)
+                self.job_done.update(set(cached_uids) - self.pending.keys() - self.active_uids)
                 for uid in uids:
                     self.pending[uid] = None
+                    self.job_uids.add(uid)
+                    self.job_done.discard(uid)
                 self.condition.notify_all()
 
     def cancel(self):
         with self.condition:
             self.pending.clear()
             self.cancel_event.set()
+            self.job_active = False
 
     def shutdown(self):
         with self.condition:
@@ -106,57 +125,75 @@ class FeatureWorker(QThread):
             counts[name] = sum(pending.values())
             uids.update(pending)
         return dict(counts=counts, uids=sorted(uids), unavailable=unavailable,
+                    cached_uids=sorted(self.index.thumbnail_uids() - uids),
                     download=specs.get('DINO', (None,))[0] == DINO_PENDING and counts.get('DINO', 0) > 0)
 
     def download_progress(self, *args):
         self.say('DINOv2モデルを取得中…（初回のみ、約88 MB）')
 
     def process_batch(self, uids):
+        with self.condition:
+            if not self.job_active:
+                self.start_job()
+            self.job_uids.update(uids)
+            serial = self.job_serial
         specs, unavailable = self.available()
         self.availability.emit(unavailable)
         completed = 0
-        failures = []
+        finished = {name: set() for name in specs}
+
+        def report(name, uid=None):
+            if uid is not None:
+                finished[name].add(uid)
+            with self.condition:
+                if serial != self.job_serial:
+                    return  # A cancelled job must not change a newly queued job.
+                if uid is not None and uid not in self.pending and all(uid in group for group in finished.values()):
+                    self.job_done.add(uid)
+                done, total = len(self.job_done), len(self.job_uids)
+            self.say('特徴抽出中: {engine} / 全体 {done} / {total}ファイル',
+                     engine=name, done=done, total=total)
+
         for name, (key, folder) in specs.items():
             try:
-                for number, uid in enumerate(uids, 1):
-                    check_cancel(self.cancel_event.is_set)
-                    if not self.index.pending(key, uid):
-                        continue
-                    self.say('特徴抽出中: {engine} / {done} / {total}ファイル',
-                             engine=name, done=number, total=len(uids))
-                    cached = self.encoders.get(name)
-                    if cached is None or cached.key != key:
-                        # Discard the previous DINO model before loading a replacement.
-                        self.encoders.pop(name, None)
-                        if folder:
-                            try:
-                                ensure_model(folder, self.cancel_event.is_set, self.download_progress)
-                            except SearchCancelled:
-                                self.download_failures[folder] = 'モデル取得を中止しました。次回起動またはAI検索で再試行します。'
-                                raise
-                            except Exception as exc:
-                                self.download_failures[folder] = str(exc)+'\n'+'モデル取得は次回起動またはAI検索で再試行します。'
-                                raise RuntimeError(self.download_failures[folder]) from exc
-                            self.say('DINOv2モデルを読み込み中…')
-                            encoder = DinoEncoder(folder, self.cancel_event.is_set)
-                        else:
-                            encoder = StandardEncoder()
-                        self.encoders[name] = encoder
-                        key = encoder.key
+                check_cancel(self.cancel_event.is_set)
+                report(name)
+                if not self.index.pending(key, uids=uids):
+                    for uid in uids:
+                        report(name, uid)
+                    continue
+                cached = self.encoders.get(name)
+                if cached is None or cached.key != key:
+                    # Discard the previous DINO model before loading a replacement.
+                    self.encoders.pop(name, None)
+                    if folder:
+                        try:
+                            ensure_model(folder, self.cancel_event.is_set, self.download_progress)
+                        except SearchCancelled:
+                            self.download_failures[folder] = 'モデル取得を中止しました。次回起動またはAI検索で再試行します。'
+                            raise
+                        except Exception as exc:
+                            self.download_failures[folder] = str(exc)+'\n'+'モデル取得は次回起動またはAI検索で再試行します。'
+                            raise RuntimeError(self.download_failures[folder]) from exc
+                        self.say('DINOv2モデルを読み込み中…')
+                        encoder = DinoEncoder(folder, self.cancel_event.is_set)
                     else:
-                        encoder = cached
-                    completed += self.index.build(encoder, self.cancel_event.is_set, uid=uid)
+                        encoder = StandardEncoder()
+                    self.encoders[name] = encoder
+                else:
+                    encoder = cached
+                # One bounded build/transaction buffer across files, rather than
+                # opening and committing a DB connection for every single page.
+                completed += self.index.build(encoder, self.cancel_event.is_set,
+                    progress=lambda *args: report(name), uids=uids,
+                    file_progress=lambda uid: report(name, uid))
             except SearchCancelled:
                 raise
             except Exception as exc:
                 # A broken optional engine must not prevent the other engine.
                 unavailable[name] = str(exc)
-                failures.append(name)
         self.availability.emit(unavailable)
-        if failures:
-            self.say('特徴抽出を一部保留しました。完了: {count}ページ分', count=completed)
-        else:
-            self.say('特徴抽出完了: {count}ページ分（標準・DINOの合計）', count=completed)
+        return completed
 
     def run(self):
         try:
@@ -178,6 +215,7 @@ class FeatureWorker(QThread):
                         return
                     # Bound each batch so generation events and cancellation stay responsive.
                     uids = [self.pending.popitem(last=False)[0] for _ in range(min(32, len(self.pending)))]
+                    self.active_uids = set(uids)
                     self.cancel_event.clear()
                 self.busy.emit(True)
                 try:
@@ -187,7 +225,17 @@ class FeatureWorker(QThread):
                 except Exception as exc:
                     self.say('特徴抽出を保留しました: {error}', error=str(exc))
                 finally:
-                    self.busy.emit(False)
+                    with self.condition:
+                        self.active_uids.clear()
+                        if not self.pending:
+                            self.job_active = False
+                            self.busy.emit(False)
+                            if not self.cancel_event.is_set():
+                                done, total = len(self.job_done), len(self.job_uids)
+                                if done == total:
+                                    self.say('特徴抽出完了: 全体 {done} / {total}ファイル', done=done, total=total)
+                                else:
+                                    self.say('特徴抽出を一部保留: 全体 {done} / {total}ファイル', done=done, total=total)
         finally:
             # Release the optional model on its owning worker thread.
             self.encoders.clear()
@@ -269,7 +317,7 @@ class FeatureIndexPanel(QWidget):
 
         def answered(result):
             if not self.closing and result == QMessageBox.StandardButton.Yes:
-                self.worker.enqueue(report['uids'])
+                self.worker.enqueue(report['uids'], cached_uids=report.get('cached_uids', ()))
             self.prompt = None
             prompt.deleteLater()
 
