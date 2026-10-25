@@ -1,4 +1,4 @@
-"""Consent boundaries, generated-thumbnail events and dual-engine cache lifecycle."""
+"""Consent boundaries, generated-thumbnail events and DINO-only cache lifecycle."""
 import builtins
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -36,7 +36,7 @@ class DownloadedDino(StandardEncoder):
         self.key = dino_model_key(folder, stop)
 
 
-SPECS = {'標準': (StandardEncoder.key, None), 'DINO': (FakeDino.key, 'local-model')}
+SPECS = {'DINO': (FakeDino.key, 'local-model')}
 
 
 class AutomaticFeatureTests(unittest.TestCase):
@@ -100,7 +100,50 @@ class AutomaticFeatureTests(unittest.TestCase):
             return c.execute('SELECT count(*) FROM visual_features WHERE engine=?'+
                 (' AND registration_uid=?' if uid else ''), (engine, uid) if uid else (engine,)).fetchone()[0]
 
-    def test_startup_confirmation_yes_extracts_both_without_source_reads(self):
+    def test_visibility_hides_idle_completion_and_cancel_but_shows_work_and_errors(self):
+        panel = self.panel()
+        panel.set_status('特徴抽出は待機中です。', {})
+        self.assertTrue(panel.isHidden())
+        panel.set_busy(True)
+        panel.set_status('特徴抽出中: {engine} / 全体 {done} / {total}ファイル',
+                         dict(engine='DINO', done=1, total=65))
+        self.assertTrue(panel.isVisible())
+        self.assertTrue(panel.cancel_button.isVisible())
+        panel.set_busy(False)
+        panel.set_status('特徴抽出完了: 全体 {done} / {total}ファイル', dict(done=65,total=65))
+        self.assertTrue(panel.isHidden())
+        panel.retranslate()
+        self.assertTrue(panel.isHidden())
+        panel.set_busy(True)
+        self.assertTrue(panel.isVisible())
+        panel.set_status('特徴抽出を中止しました。完了済みデータは保持します。', {})
+        panel.set_busy(False)
+        self.assertTrue(panel.isHidden())
+        panel.set_availability({'DINO':'offline'})
+        self.assertTrue(panel.isVisible())
+        self.assertTrue(panel.notice.isVisible())
+        self.assertFalse(panel.label.isVisible())
+        panel.set_availability({})
+        self.assertTrue(panel.isHidden())
+
+    def test_existing_dino_reused_without_standard_prompt_or_rewriting_vectors(self):
+        row = self.add('cached.tif', 2)
+        self.index.build(FakeDino('local-model', lambda:False))
+        with self.db.connect() as c:
+            before = list(c.execute('SELECT engine,vectors,local_data FROM visual_features ORDER BY page_number'))
+        probe = FeatureWorker(self.db)
+        with patch.object(probe,'available',return_value=(SPECS,{})), \
+             patch('feature_indexing.DinoEncoder',side_effect=AssertionError('reloaded complete features')):
+            report = probe.inspect_startup()
+            self.assertEqual(report['counts'],{'DINO':0})
+            self.assertFalse(report['uids'])
+            self.assertEqual(probe.process_batch([row['registration_uid']]),0)
+        with self.db.connect() as c:
+            after = list(c.execute('SELECT engine,vectors,local_data FROM visual_features ORDER BY page_number'))
+        self.assertEqual([tuple(r) for r in before],[tuple(r) for r in after])
+        self.assertEqual(self.count(StandardEncoder.key),0)
+
+    def test_startup_confirmation_yes_extracts_only_dino_without_source_reads(self):
         self.add('old.tif', 2)
         for p in self.root.iterdir(): p.unlink()
         panel = self.panel()
@@ -119,9 +162,10 @@ class AutomaticFeatureTests(unittest.TestCase):
             self.assertIn('2', panel.prompt.text())
             panel.prompt.done(QMessageBox.StandardButton.Yes)
             self.wait_until(lambda: self.count(FakeDino.key) == 2)
-            self.assertEqual(self.count(StandardEncoder.key), 2)
+            self.wait_until(panel.isHidden)
+            self.assertEqual(self.count(StandardEncoder.key), 0)
             report = panel.worker.inspect_startup()
-            self.assertEqual(report['counts'], {'標準': 0, 'DINO': 0})
+            self.assertEqual(report['counts'], {'DINO': 0})
             panel.confirm_startup(report)
             self.assertIsNone(panel.prompt)
 
@@ -141,7 +185,7 @@ class AutomaticFeatureTests(unittest.TestCase):
             service.make_thumbnail(new)
             self.wait_until(lambda: self.count(FakeDino.key, new['registration_uid']) == 1)
             self.assertEqual(emitted, [new['registration_uid']])
-            self.assertEqual(self.count(StandardEncoder.key, new['registration_uid']), 1)
+            self.assertEqual(self.count(StandardEncoder.key, new['registration_uid']), 0)
             self.assertEqual(self.count(StandardEncoder.key, old['registration_uid']), 0)
             self.assertEqual(self.count(FakeDino.key, old['registration_uid']), 0)
             # Stale jobs must not emit a generation event, even if the source stat matches.
@@ -153,18 +197,21 @@ class AutomaticFeatureTests(unittest.TestCase):
         with patch.object(probe, 'available', return_value=(SPECS, {})):
             self.assertEqual(probe.inspect_startup()['uids'], [old['registration_uid']])
 
-    def test_dino_unavailable_standard_still_indexes(self):
+    def test_dino_unavailable_does_not_fall_back_to_standard(self):
         row = self.add('one.png')
         panel = self.panel()
         with patch('feature_indexing.check_ai_packages', side_effect=RuntimeError('AI packages missing')):
             panel.start()
-            self.wait_until(lambda: panel.prompt is not None)
+            self.wait_until(lambda: panel.state[0] == '特徴抽出は待機中です。')
+            self.assertIsNone(panel.prompt)
             self.assertIn('DINO', panel.unavailable)
-            panel.prompt.done(QMessageBox.StandardButton.Yes)
-            self.wait_until(lambda: self.count(StandardEncoder.key) == 1)
-            self.assertTrue(panel.notice.text())
-            self.assertFalse(self.index.pending(StandardEncoder.key, row['registration_uid']))
-            self.assertIn('DINO', panel.worker.inspect_startup()['unavailable'])
+            self.assertTrue(panel.notice.isVisible())
+            self.assertFalse(panel.label.isVisible())
+            panel.thumbnail_saved(row['registration_uid'])
+            self.wait_until(lambda: '一部保留' in panel.state[0])
+            self.assertEqual(self.count(StandardEncoder.key), 0)
+            self.assertEqual(self.count(FakeDino.key), 0)
+            self.assertEqual(panel.worker.inspect_startup()['counts'], {})
 
     def test_cancel_preserves_completed_pages_and_restart_only_offers_missing(self):
         row = self.add('many.tif', 3)
@@ -178,8 +225,8 @@ class AutomaticFeatureTests(unittest.TestCase):
                 entered.set()
                 if not gate.wait(8): raise AssertionError('test gate timed out')
             return original(encoder, image, multiple)
-        with patch.object(panel.worker, 'available', return_value=({'標準': SPECS['標準']}, {})), \
-             patch.object(StandardEncoder, 'encode', slow):
+        with patch.object(panel.worker, 'available', return_value=(SPECS, {})), \
+             patch('feature_indexing.DinoEncoder', FakeDino), patch.object(FakeDino, 'encode', slow):
             try:
                 panel.start()
                 self.wait_until(lambda: panel.prompt is not None)
@@ -189,38 +236,42 @@ class AutomaticFeatureTests(unittest.TestCase):
             finally:
                 gate.set()
             self.wait_until(lambda: '中止しました' in panel.label.text())
-            self.assertEqual(self.count(StandardEncoder.key), 1)
+            self.assertEqual(self.count(FakeDino.key), 1)
             probe = FeatureWorker(self.db)
-            with patch.object(probe, 'available', return_value=({'標準': SPECS['標準']}, {})):
+            with patch.object(probe, 'available', return_value=(SPECS, {})):
                 report = probe.inspect_startup()
-            self.assertEqual(report['counts'], {'標準': 2})
+            self.assertEqual(report['counts'], {'DINO': 2})
             panel.worker.enqueue(report['uids'])
-            self.wait_until(lambda: self.count(StandardEncoder.key) == 3)
+            self.wait_until(lambda: self.count(FakeDino.key) == 3)
             self.assertEqual(len(calls), 4, 'recomputed an already completed page')
 
     def test_dino_only_backlog_and_thumbnail_revision(self):
         row = self.add('one.tif', 2)
         self.index.build(StandardEncoder())
+        with self.db.connect() as c:
+            legacy = [tuple(r) for r in c.execute('SELECT vectors,local_data FROM visual_features WHERE engine=? ORDER BY page_number', (StandardEncoder.key,))]
         probe = FeatureWorker(self.db)
         with patch.object(probe, 'available', return_value=(SPECS, {})), \
              patch('feature_indexing.DinoEncoder', FakeDino):
-            self.assertEqual(probe.inspect_startup()['counts'], {'標準': 0, 'DINO': 2})
+            self.assertEqual(probe.inspect_startup()['counts'], {'DINO': 2})
             probe.process_batch([row['registration_uid']])
             self.assertEqual(self.count(FakeDino.key), 2)
+            with self.db.connect() as c:
+                self.assertEqual(legacy,[tuple(r) for r in c.execute('SELECT vectors,local_data FROM visual_features WHERE engine=? ORDER BY page_number', (StandardEncoder.key,))])
             data = png(picture(65))
             self.db.save_thumb(row, data, [data], page_count=1)
-            self.assertEqual(probe.inspect_startup()['counts'], {'標準': 1, 'DINO': 1})
+            self.assertEqual(probe.inspect_startup()['counts'], {'DINO': 1})
             probe.process_batch([row['registration_uid']])
-            self.assertEqual(self.count(StandardEncoder.key), 1)
+            self.assertEqual(self.count(StandardEncoder.key), 0)
             self.assertEqual(self.count(FakeDino.key), 1)
 
-    def test_broken_dino_does_not_poison_cache_or_stop_standard(self):
+    def test_broken_dino_does_not_poison_cache_or_fall_back_to_standard(self):
         row = self.add('one.png')
         probe = FeatureWorker(self.db)
         with patch.object(probe, 'available', return_value=(SPECS, {})), \
              patch('feature_indexing.DinoEncoder', side_effect=RuntimeError('model load failed')):
             probe.process_batch([row['registration_uid']])
-            self.assertEqual(self.count(StandardEncoder.key), 1)
+            self.assertEqual(self.count(StandardEncoder.key), 0)
             self.assertEqual(self.count(FakeDino.key), 0)
             self.assertEqual(probe.inspect_startup()['counts']['DINO'], 1)
 
@@ -268,7 +319,7 @@ class AutomaticFeatureTests(unittest.TestCase):
              patch('feature_indexing.importlib.util.find_spec', return_value=object()), \
              patch('feature_indexing.ensure_model') as download:
             report = panel.worker.inspect_startup()
-            self.assertEqual(report['counts'], {'標準': 0, 'DINO': 1})
+            self.assertEqual(report['counts'], {'DINO': 1})
             self.assertTrue(report['download'])
             panel.start()
             self.wait_until(lambda: panel.prompt is not None)
@@ -288,22 +339,22 @@ class AutomaticFeatureTests(unittest.TestCase):
              patch('feature_indexing.ensure_model', side_effect=obtain) as download, \
              patch('feature_indexing.DinoEncoder', DownloadedDino):
             probe.process_batch([row['registration_uid']])
-            self.assertEqual(self.count(StandardEncoder.key), 1)
+            self.assertEqual(self.count(StandardEncoder.key), 0)
             self.assertEqual(self.count(dino_model_key(folder)), 1)
             self.assertEqual(self.count(DINO_PENDING), 0)
             self.assertEqual(download.call_count, 1)
             probe.process_batch([row['registration_uid']])
             self.assertEqual(download.call_count, 1)
-            self.assertEqual(probe.inspect_startup()['counts'], {'標準': 0, 'DINO': 0})
+            self.assertEqual(probe.inspect_startup()['counts'], {'DINO': 0})
 
-    def test_download_failure_keeps_standard_and_does_not_retry_every_batch(self):
+    def test_download_failure_does_not_fall_back_or_retry_every_batch(self):
         row = self.add('old.png')
         probe = FeatureWorker(self.db)
         with patch('feature_indexing.check_ai_packages'), \
              patch('feature_indexing.importlib.util.find_spec', return_value=object()), \
              patch('feature_indexing.ensure_model', side_effect=OSError('offline')) as download:
             probe.process_batch([row['registration_uid']])
-            self.assertEqual(self.count(StandardEncoder.key), 1)
+            self.assertEqual(self.count(StandardEncoder.key), 0)
             self.assertEqual(self.count(DINO_PENDING), 0)
             probe.process_batch([row['registration_uid']])
             self.assertEqual(download.call_count, 1)
@@ -316,7 +367,7 @@ class AutomaticFeatureTests(unittest.TestCase):
         from image_search_dialog import SearchWorker
         row = self.add('old.png')
         folder = self.db.get_setting('image_search_model', '')
-        worker = SearchWorker(self.db, png(picture(row['id'])), 'dino', folder, None, True, False)
+        worker = SearchWorker(self.db, png(picture(row['id'])), folder, None, True, False)
         results, errors = [], []
         worker.completed.connect(results.append)
         worker.failed.connect(errors.append)
@@ -330,7 +381,7 @@ class AutomaticFeatureTests(unittest.TestCase):
 
     def test_empty_catalog_does_not_trigger_download(self):
         from image_search_dialog import SearchWorker
-        worker = SearchWorker(self.db, png(picture(2)), 'dino',
+        worker = SearchWorker(self.db, png(picture(2)),
                               self.db.get_setting('image_search_model', ''), None, True, False)
         errors = []
         worker.failed.connect(errors.append)
@@ -344,10 +395,27 @@ class AutomaticFeatureTests(unittest.TestCase):
              patch('feature_indexing.importlib.util.find_spec', return_value=object()):
             self.assertFalse(probe.inspect_startup()['download'])
 
+    def test_search_missing_ai_packages_reports_error_without_standard_fallback(self):
+        from image_search_dialog import SearchWorker
+        row = self.add('one.png')
+        self.index.build(StandardEncoder())
+        worker = SearchWorker(self.db, png(picture(row['id'])), 'local-model', None, False, False)
+        results, errors = [], []
+        worker.completed.connect(results.append)
+        worker.failed.connect(errors.append)
+        with patch('download_search_model.check_ai_packages', side_effect=RuntimeError('AI packages missing')), \
+             patch('download_search_model.ensure_model') as download, \
+             patch('visual_search.StandardEncoder', side_effect=AssertionError('Standard fallback')):
+            worker.run()
+            download.assert_not_called()
+        self.assertFalse(results)
+        self.assertEqual(errors,['AI packages missing'])
+        self.assertEqual(self.count(StandardEncoder.key),1)
+
     def test_waiting_for_search_cache_lock_is_cancellable(self):
         row = self.add('one.png')
         panel = self.panel()
-        with patch.object(panel.worker, 'available', return_value=({'標準': SPECS['標準']}, {})):
+        with patch.object(panel.worker, 'available', return_value=(SPECS, {})), patch('feature_indexing.DinoEncoder', FakeDino):
             with index_lock(lambda: False):
                 panel.start()
                 self.wait_until(lambda: panel.prompt is not None)
@@ -371,7 +439,7 @@ class AutomaticFeatureTests(unittest.TestCase):
             for p in self.root.iterdir(): p.unlink()
             panel.prompt.done(QMessageBox.StandardButton.Yes)
             self.wait_until(lambda: self.count(panel.worker.model_key) == 1, seconds=45)
-            self.assertEqual(self.count(StandardEncoder.key), 1)
+            self.assertEqual(self.count(StandardEncoder.key), 0)
 
 
 if __name__ == '__main__':

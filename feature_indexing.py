@@ -14,7 +14,7 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox
 
 from i18n import tr, translate_message
-from visual_search import (SearchIndex, StandardEncoder, DinoEncoder, SearchCancelled,
+from visual_search import (SearchIndex, DinoEncoder, SearchCancelled,
                            check_cancel, dino_model_key)
 from download_search_model import check_ai_packages, model_ready, ensure_model
 
@@ -87,8 +87,7 @@ class FeatureWorker(QThread):
         specs, unavailable = {}, {}
         if importlib.util.find_spec('cv2') is None:
             reason = 'OpenCVを読み込めません。IMAGE_SEARCH.ja.mdの導入手順を確認してください。'
-            return specs, {'標準': reason, 'DINO': reason}
-        specs['標準'] = (StandardEncoder.key, None)
+            return specs, {'DINO': reason}
         folder = Path(self.db.get_setting('image_search_model',
                       str(Path(__file__).with_name('models')/'dinov2-small'))).expanduser()
         try:
@@ -166,19 +165,16 @@ class FeatureWorker(QThread):
                 if cached is None or cached.key != key:
                     # Discard the previous DINO model before loading a replacement.
                     self.encoders.pop(name, None)
-                    if folder:
-                        try:
-                            ensure_model(folder, self.cancel_event.is_set, self.download_progress)
-                        except SearchCancelled:
-                            self.download_failures[folder] = 'モデル取得を中止しました。次回起動またはAI検索で再試行します。'
-                            raise
-                        except Exception as exc:
-                            self.download_failures[folder] = str(exc)+'\n'+'モデル取得は次回起動またはAI検索で再試行します。'
-                            raise RuntimeError(self.download_failures[folder]) from exc
-                        self.say('DINOv2モデルを読み込み中…')
-                        encoder = DinoEncoder(folder, self.cancel_event.is_set)
-                    else:
-                        encoder = StandardEncoder()
+                    try:
+                        ensure_model(folder, self.cancel_event.is_set, self.download_progress)
+                    except SearchCancelled:
+                        self.download_failures[folder] = 'モデル取得を中止しました。次回起動またはAI検索で再試行します。'
+                        raise
+                    except Exception as exc:
+                        self.download_failures[folder] = str(exc)+'\n'+'モデル取得は次回起動またはAI検索で再試行します。'
+                        raise RuntimeError(self.download_failures[folder]) from exc
+                    self.say('DINOv2モデルを読み込み中…')
+                    encoder = DinoEncoder(folder, self.cancel_event.is_set)
                     self.encoders[name] = encoder
                 else:
                     encoder = cached
@@ -190,7 +186,7 @@ class FeatureWorker(QThread):
             except SearchCancelled:
                 raise
             except Exception as exc:
-                # A broken optional engine must not prevent the other engine.
+                # Retain completed features and report a model/dependency error.
                 unavailable[name] = str(exc)
         self.availability.emit(unavailable)
         return completed
@@ -249,6 +245,7 @@ class FeatureIndexPanel(QWidget):
         self.prompt = None
         self.state = ('未抽出のサムネイルを確認中…', {})
         self.unavailable = {}
+        self.active = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
@@ -266,7 +263,7 @@ class FeatureIndexPanel(QWidget):
         self.worker = FeatureWorker(db, self)
         self.worker.status.connect(self.set_status)
         self.worker.availability.connect(self.set_availability)
-        self.worker.busy.connect(self.cancel_button.setEnabled)
+        self.worker.busy.connect(self.set_busy)
         self.worker.backlog.connect(self.confirm_startup)
         self.cancel_button.clicked.connect(self.worker.cancel)
         self.retranslate()
@@ -286,6 +283,20 @@ class FeatureIndexPanel(QWidget):
         self.unavailable = reasons
         self.retranslate()
 
+    def set_busy(self, active):
+        self.active = active
+        self.cancel_button.setEnabled(active)
+        self.update_visibility()
+
+    def update_visibility(self):
+        text, _ = self.state
+        quiet = text in ('特徴抽出は待機中です。',
+                         '特徴抽出を中止しました。完了済みデータは保持します。') or text.startswith('特徴抽出完了:')
+        self.label.setVisible(not quiet)
+        self.cancel_button.setVisible(self.active)
+        # Normal completion/idle uses no space; actionable errors stay visible.
+        self.setVisible(not quiet or self.active or bool(self.unavailable))
+
     def retranslate(self):
         text, values = self.state
         self.label.setText(tr(text, **{k: translate_message(v) if isinstance(v, str) else v
@@ -295,6 +306,7 @@ class FeatureIndexPanel(QWidget):
                             for name, reason in self.unavailable.items()))
         self.notice.setVisible(bool(self.unavailable))
         self.cancel_button.setText(tr('特徴抽出を中止'))
+        self.update_visibility()
 
     def confirm_startup(self, report):
         if self.closing or not report['uids']:

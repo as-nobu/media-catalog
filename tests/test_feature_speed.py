@@ -207,7 +207,7 @@ class WholeJobProgressTests(unittest.TestCase):
         probe.enqueue(['four'])
         self.assertEqual(len(probe.job_uids), 4)
         self.assertEqual(probe.job_done, {'one'})
-        probe.enqueue(['one'])  # A regenerated thumbnail needs both engines again.
+        probe.enqueue(['one'])  # A regenerated thumbnail needs DINO features again.
         self.assertFalse(probe.job_done)
         serial = probe.job_serial
         probe.cancel()
@@ -226,7 +226,7 @@ class WholeJobProgressTests(unittest.TestCase):
             panel.prompt.done(QMessageBox.StandardButton.Yes)
             self.wait_until(lambda: '“Á’¥’Šo‚ğˆê•”•Û—¯: ‘S‘Ì' in panel.label.text())
             self.assertEqual(panel.state[1], dict(done=0, total=3))
-            self.assertEqual(self.count(vs.StandardEncoder.key), 3)
+            self.assertEqual(self.count(vs.StandardEncoder.key), 0)
             self.assertEqual(self.count(FakeDino.key), 0)
 
 

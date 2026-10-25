@@ -6,7 +6,6 @@ The standard engine requires OpenCV, NumPy and Pillow; AI imports are lazy.
 from __future__ import annotations
 
 import hashlib
-import heapq
 import io
 import json
 import threading
@@ -188,11 +187,11 @@ class DinoEncoder:
 # Page thumbnails are authoritative. Legacy DBs with only thumbs get page 1.
 def page_query(with_data):
     return '''SELECT f.id AS file_id,f.registration_uid,f.revision,p.page_number''' + (',p.data' if with_data else '') + '''
-           FROM files f JOIN page_thumbs p ON p.file_id=f.id
+           FROM files f JOIN page_thumbs p ON p.file_id=f.id WHERE f.missing=0
            UNION ALL
            SELECT f.id,f.registration_uid,f.revision,1''' + (',t.data' if with_data else '') + '''
            FROM files f JOIN thumbs t ON t.file_id=f.id
-           WHERE NOT EXISTS (SELECT 1 FROM page_thumbs p WHERE p.file_id=f.id)'''
+           WHERE f.missing=0 AND NOT EXISTS (SELECT 1 FROM page_thumbs p WHERE p.file_id=f.id)'''
 
 
 PAGES = page_query(True)
@@ -360,7 +359,7 @@ class SearchIndex:
         return new
 
     def search(self, query_blob, encoder=None, stop=lambda: False, progress=lambda *a: None,
-               allowed_uids=None, detailed=True, limit=100, candidates=300, rebuild=False):
+               allowed_uids=None, detailed=False, limit=100, candidates=300, rebuild=False):
         encoder = encoder or StandardEncoder()
         query = decode(query_blob)
         if min(query.size) < 8:
@@ -370,77 +369,46 @@ class SearchIndex:
         indexed = self.build(encoder, stop, progress, rebuild)
         check_cancel(stop)
         allowed = None if allowed_uids is None else set(allowed_uids)
-        # Keep just IDs/scores in memory; vector and descriptor reads are bounded.
-        ranking = []
-        errors = pages = 0
-        after = (0, 0)
-        while True:
-            check_cancel(stop)
-            with self.db.connect() as c:
-                rows = c.execute('''SELECT v.file_id,v.page_number,v.registration_uid,v.revision,v.vectors,v.error
-                    FROM visual_features v JOIN files f ON f.id=v.file_id
-                    AND f.registration_uid=v.registration_uid AND f.revision=v.revision
-                    WHERE engine=? AND (v.file_id,v.page_number)>(?,?)
-                    ORDER BY v.file_id,v.page_number LIMIT 128''', (encoder.key, *after)).fetchall()
-            if not rows:
-                break
-            for row in rows:
+        from search_vectors import rank
+        ranking, pages, errors = rank(self.db, encoder.key, qvectors, stop, progress,
+                                      allowed, None if detailed else max(1, candidates))
+        # The query's descriptors are reused across all candidate comparisons.
+        qlocal['descriptors'] = qlocal['descriptors'].astype(np.float32)
+        best = {}
+        with self.db.connect() as c:
+            for n, (similarity, fid, page, uid, revision) in enumerate(ranking, 1):
                 check_cancel(stop)
-                after = (row['file_id'], row['page_number'])
-                if allowed is not None and row['registration_uid'] not in allowed:
-                    continue
-                if row['error']:
-                    errors += 1
-                    continue
-                try:
-                    vectors = unpack(row['vectors'])['vectors']
-                    score = float(np.max(vectors @ qvectors.T))
-                    if not np.isfinite(score):
-                        raise ValueError('invalid cached vector')
-                except Exception:
-                    errors += 1
-                    continue
-                pages += 1
-                ranking.append((score, row['file_id'], row['page_number'], row['registration_uid'], row['revision']))
-            progress('rank', pages, 0)
-        ranking = sorted(ranking, reverse=True) if detailed else heapq.nlargest(candidates, ranking)
-        best = []
-        for n, (similarity, fid, page, uid, revision) in enumerate(ranking, 1):
-            check_cancel(stop)
-            with self.db.connect() as c:
                 row = c.execute('''SELECT coalesce(v.local_data,l.data) AS local_data
                     FROM visual_features v JOIN files f ON f.id=v.file_id
-                    AND f.registration_uid=v.registration_uid AND f.revision=v.revision
+                    AND f.registration_uid=v.registration_uid AND f.revision=v.revision AND f.missing=0
                     LEFT JOIN visual_local_features l ON l.file_id=v.file_id AND l.page_number=v.page_number
                     AND l.registration_uid=v.registration_uid AND l.revision=v.revision AND l.version=?
                     WHERE v.file_id=? AND v.page_number=? AND v.engine=? AND v.registration_uid=? AND v.revision=?''',
                     (LOCAL_VERSION,fid,page,encoder.key,uid,revision)).fetchone()
-            if row is None:
-                continue
-            try:
-                geometry, polygon, inliers = match_geometry(qlocal, unpack(row['local_data']))
-            except (ValueError, KeyError, TypeError, opencv().error):
-                geometry, polygon, inliers = 0., None, 0
-            # Geometrically verified copies first, then visual neighbours. This
-            # score is only a ranking value, never a probability or identity proof.
-            score = (2. + geometry) if geometry else max(-1., min(1., similarity))
-            item = dict(file_id=fid, registration_uid=uid, revision=revision, page_number=page,
-                        score=score, similarity=similarity, inliers=inliers, polygon=polygon)
-            entry = (score, similarity, fid, page, item)
-            if len(best) < limit:
-                heapq.heappush(best, entry)
-            elif entry[:4] > best[0][:4]:
-                heapq.heapreplace(best, entry)
-            progress('match', n, len(ranking))
+                if row is None:
+                    continue
+                try:
+                    geometry, polygon, inliers = match_geometry(qlocal, unpack(row['local_data']))
+                except Exception:
+                    geometry, polygon, inliers = 0., None, 0
+                # One catalog item per file, retaining its best matching page.
+                score = (2. + geometry) if geometry else max(-1., min(1., similarity))
+                item = dict(file_id=fid, registration_uid=uid, revision=revision, page_number=page,
+                            score=score, similarity=similarity, inliers=inliers, polygon=polygon)
+                entry = (score, similarity, fid, page, item)
+                if uid not in best or entry[:4] > best[uid][:4]:
+                    best[uid] = entry
+                progress('match', n, len(ranking))
         hits = []
-        for *_, hit in sorted(best, reverse=True):
+        for *_, hit in sorted(best.values(), key=lambda entry: entry[:4], reverse=True):
             check_cancel(stop)
             row = self.db.file_record(hit['registration_uid'])
-            if row is not None and row['revision'] == hit['revision']:
+            if row is not None and not row['missing'] and row['revision'] == hit['revision']:
                 hits.append(dict(row, **{k:v for k,v in hit.items() if k not in row}))
+                if len(hits) >= limit: break
         with self.db.connect() as c:
             uids = [r[0] for r in c.execute('''SELECT registration_uid FROM files f
-                WHERE NOT EXISTS (SELECT 1 FROM thumbs t WHERE t.file_id=f.id)
+                WHERE f.missing=0 AND NOT EXISTS (SELECT 1 FROM thumbs t WHERE t.file_id=f.id)
                 AND NOT EXISTS (SELECT 1 FROM page_thumbs p WHERE p.file_id=f.id)''')]
         absent = sum(allowed is None or uid in allowed for uid in uids)
         return SearchReport(hits, pages, errors, absent, indexed, len(ranking))
@@ -451,7 +419,7 @@ def match_geometry(query, candidate):
     q, t = query['descriptors'], candidate['descriptors']
     if len(q) < 8 or len(t) < 8:
         return 0., None, 0
-    pairs = cv.BFMatcher(cv.NORM_L2).knnMatch(q.astype(np.float32), t.astype(np.float32), k=2)
+    pairs = cv.BFMatcher(cv.NORM_L2).knnMatch(q.astype(np.float32, copy=False), t.astype(np.float32, copy=False), k=2)
     good = [pair[0] for pair in pairs if len(pair)==2 and pair[0].distance < .72*pair[1].distance]
     # Do not count repeated matches to the same target point as evidence.
     good = list({m.trainIdx:m for m in sorted(good, key=lambda m:m.distance, reverse=True)}.values())

@@ -98,6 +98,16 @@ class Catalog:
                 registration_uid TEXT NOT NULL, revision INTEGER NOT NULL,
                 data BLOB NOT NULL,
                 PRIMARY KEY(file_id,page_number,version))''')
+            from search_cache_schema import TRIGGERS
+            # Metadata-only invalidation for the optional in-memory vector cache.
+            # No saved vectors or thumbnails are converted or regenerated.
+            c.executescript('''
+                CREATE TABLE IF NOT EXISTS visual_search_state (
+                    engine TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0);
+                CREATE INDEX IF NOT EXISTS visual_features_engine ON visual_features(engine,file_id,page_number);
+            ''')
+            for statement in TRIGGERS.values():
+                c.execute(statement)
             if not c.execute("SELECT 1 FROM settings WHERE key='page_limit_20_v1'").fetchone():
                 c.execute('DELETE FROM page_thumbs WHERE page_number>?',(MAX_PAGE_THUMBNAILS,))
                 c.execute("INSERT INTO settings VALUES ('page_limit_20_v1','1')")
@@ -304,8 +314,14 @@ class Catalog:
                 paths.add(r[0])
         return sorted(paths)
 
-    def rows(self, folder=None, recursive=True, missing_only=False, search='', timeout_only=False, error_only=False, kind='', sort='name'):
+    def rows(self, folder=None, recursive=True, missing_only=False, search='', timeout_only=False, error_only=False, kind='', sort='name', registrations=None):
         where, args = [], []
+        if registrations is not None:
+            registrations = tuple(registrations)
+            if not registrations:
+                return []
+            where.append('registration_uid IN ('+','.join('?' for _ in registrations)+')')
+            args.extend(registrations)
         if folder:
             folder = norm(folder)
             if recursive:

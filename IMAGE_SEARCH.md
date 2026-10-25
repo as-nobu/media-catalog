@@ -41,58 +41,71 @@ opencv with pip OpenCV or install multiple pip OpenCV variants.
 
 ## Use
 
-Click **Image search** beside the text search field. The app temporarily hides
-its windows. Drag across the desired screen region and release; Esc or
-right-click cancels. Search results appear in a separate window, preserving
-the main catalog's filters. Screenshots remain in memory only.
+Click **Image search** beside the text search field to expand the normally hidden
+search panel. Opening it does not capture the screen, start a search or download a model.
+Click **Select region** inside the panel; the app temporarily hides its windows.
+Drag across the desired screen region and release to search; Esc or
+right-click cancels. Results appear directly in the main catalog, with its
+existing thumbnail view, details panel, notes, tags and context menu. Screenshots
+remain in memory only. Each file appears once, showing its best matching page.
+Hover to enlarge that cached page; the details panel includes the matching page,
+similarity and inlier count. Opening an original remains an explicit action and
+may download it.
 
-Select a result to see its cached page, path, matching page number and ranking
-score. Cyan outlines show locally matched regions where available. Copy the
-path or use **Select in catalog**, which clears main-window filters and selects
-the file without opening it. Explicitly opening the original from the catalog
-may download it. Close the search window to return to normal browsing.
+**Back to catalog** restores the previous catalog filters. **Show search results**
+returns to the saved results without another search. Selecting another candidate
+does not dismiss the results. Results are revalidated against current catalog
+records when the view refreshes.
 
-- **Standard** uses colour/structure descriptors and SIFT geometric verification;
-  no AI model is needed. **AI** uses DINOv2 plus SIFT.
-- **Within current catalog filters** restricts results to the files displayed
-  when the search window was opened. By default the whole catalog is searched.
-- **Thorough partial matching** is on by default and checks local features on
-  every candidate page. Turn it off to verify only the top 300 visual candidates.
-- At most 100 pages are shown. Geometrically consistent local matches are ranked
-  first, followed by visual similarity. Scores are not probabilities, and a
-  locally matched image is not proof of the same source file or specimen.
-- **Cancel** retains completed index entries. The next search resumes indexing.
-- **Rebuild search index** rebuilds only the selected engine's search data,
-  without regenerating thumbnails or reading originals.
+Buttons and the two search options share one row, beside a small query preview;
+status and result counts appear underneath. Click **Image search** again to collapse the controls.
+The query, settings and results are retained; an active search continues.
+Reopening does not capture or search again. Every app launch starts with the panel hidden.
+
+- Search uses **DINOv2 plus SIFT** exclusively. The former Standard preference is
+  ignored. OpenCV remains required for local-feature verification.
+- **Within current catalog filters** uses the files displayed when Search is
+  pressed. By default, all active catalog registrations are searched.
+- **Verify partial matches in every page (slow)** is OFF by default. Normal
+  search compares all global vectors and verifies only the top 300 pages.
+  Enable the option for exhaustive local matching; it can recover crops outside
+  the shortlist but is considerably slower. The old automatically saved
+  exhaustive default is not inherited; this option uses a new explicit setting.
+- At most 100 distinct files are shown, with their best matching page. Local
+  geometric matches rank first; similarity and inliers do not prove identity.
+- **Cancel** retains completed index entries and the previous search results.
 
 ### Automatic feature extraction
 
-- At startup, the app checks missing features for both engines and shows page
+- At startup, the app checks missing DINO features and shows page
   counts in a Yes/No confirmation (default No). For the existing backlog, model
   download/inference starts only after Yes. When the model is missing, all cached pages are counted for DINO;
   actual existing feature entries are rechecked after the download.
 - No defers the existing backlog until another launch or an explicitly started
   search. It does not prevent automatic indexing of newly generated thumbnails.
 - Successfully saved new/regenerated thumbnails enqueue all their cached pages
-  for both Standard and DINO, regardless of the selected search engine. Completed
-  features are reused. Only the newly saved files enter this automatic queue.
+  for DINO only. Completed features are reused. Only the newly saved files enter
+  this automatic queue; no new Standard features are extracted.
 - DINO requires installed packages. Missing models are downloaded on demand:
   after startup consent, during new-thumbnail indexing, or for an AI search.
   Complete local models are reused without network access. Missing packages or
-  broken models defer DINO while Standard can still run. Python packages are
+  broken models defer processing, with no fallback to Standard. Python packages are
   never installed automatically; restart after installing them.
-- The main window shows status and **Cancel feature extraction**. Cancellation
+- While processing, the main window shows status and **Cancel feature extraction**.
+  Normal completion, idle and cancelled states are hidden. Actionable dependency,
+  download and indexing errors remain visible. Cancellation
   retains completed entries; subsequent new thumbnails still enqueue work.
   Thumbnail-generation pause and feature-extraction cancellation are separate.
-- An explicitly started search also fills missing features for its selected
-  engine, even if startup indexing was declined. Corrupt thumbnail errors are
-  recorded, avoiding repeated startup prompts; use Rebuild to retry them.
+- An explicitly started search also fills missing DINO features,
+  even if startup indexing was declined. Corrupt thumbnail errors are
+  recorded, avoiding repeated startup prompts.
 
 Indexing reads only SQLite thumbnails and local model files, never originals.
 
-## Optional AI engine
+## AI setup
 
-Activate the app's Conda environment and install the optional packages:
+Image search requires the AI packages. Existing AI users need not reinstall them.
+Activate the app's Conda environment and install the packages:
 
 ```sh
 conda install --override-channels -c conda-forge "pytorch-cpu>=2.2,<3" "transformers>=4.40,<5" "safetensors>=0.4,<1" "huggingface_hub>=0.23,<1"
@@ -106,7 +119,9 @@ python -m pip install -r requirements-image-ai.txt
 ```
 
 Models are downloaded automatically when needed. The default destination is
-`models/dinov2-small`; a custom folder saved in the search dialog takes precedence.
+`models/dinov2-small`; a custom folder saved in a previous version takes precedence.
+The compact panel has no engine label, model-folder editor, Browse, Rebuild or
+Close button. Existing model locations and extracted features are reused.
 You can still run `python download_search_model.py` to pre-download the model.
 Model weights occupy about 88 MB; runtime libraries
 require additional space. The engine uses CPU; a GPU is not required. You can
@@ -126,21 +141,28 @@ with remote Python code disabled. The download script pins revision
 Search data is stored in the existing SQLite database, with registration ID,
 thumbnail revision, page, engine version and AI model fingerprint. Startup after
 confirmation, successful thumbnail generation, and explicit searches update
-new/changed pages in a worker thread. Standard and AI caches are
-separate. Full backup/restore includes the index; compact annotation export
+new/changed pages in a worker thread. Existing DINO features keep their format and
+model fingerprint, including partially completed indexes. Legacy Standard entries
+are left intact; their absence never triggers an extraction prompt.
+Full backup/restore includes the index; compact annotation export
 does not. Adding the schema does not queue thumbnail regeneration.
 
 Only cached pages are searched: up to 20 pages per multipage file, and only the
 saved representative frame of a video. Missing thumbnails are counted and
-skipped, never fetched. Corrupt cached pages are counted; use Rebuild to retry.
-Old thumbnails pending regeneration and missing source files can still be
-searched, with their status shown. Fine details lost at thumbnail resolution
+skipped, never fetched. Corrupt cached pages are counted.
+Old thumbnails pending regeneration can still be searched. Files marked missing
+or unregistered are excluded. Search uses catalog metadata, not filesystem probes.
+Deleted, re-registered and regenerated result entries are filtered on refresh. Fine details lost at thumbnail resolution
 cannot be recovered. Whole-image and four overlapping region features improve
 cropped-image search but cannot guarantee arbitrary crop recall. Repeated cell
 patterns, severe edits or tiny pictures inside slides can give poor matches.
 Nearest candidates are returned even when the desired image is absent.
 
-Large catalogs take more time and space, especially with thorough matching.
+Decoded existing vectors are reused in RAM (one engine/database, approximately
+512 MiB maximum). The first search after launch or a relevant DB change loads
+vectors; subsequent searches reuse them. Larger collections fall back to bounded
+streaming. This changes neither the stored vector format nor the model identity.
+Large catalogs take more time and space, especially with exhaustive matching.
 Cancellation/exit can wait for the current image operation to finish.
 The existing automatic thumbnail generator is independent and may still
 download originals while search is running. Disable automatic generation and
@@ -149,8 +171,9 @@ wait for active jobs to finish if you need the entire app to stop retrieval.
 Tests cover offline source access, cropped/resized/rotated images, cached pages,
 incremental indexing, cancellation, lifecycle races, backup, mixed-DPI coordinate
 composition, selection gestures, GUI navigation and shutdown. Development QA
-also covers startup consent/refusal, new generation after refusal, both engines,
-missing/broken DINO, and shutdown with an unanswered confirmation. QA
+also covers startup consent/refusal, new generation after refusal, DINO-only
+indexing, missing/broken DINO, hidden idle status, explicit capture, panel
+hide/reopen, and shutdown with an unanswered confirmation. QA
 uses Linux/headless Qt; actual Windows monitors and Box Drive require testing
 on the target PC.
 

@@ -13,8 +13,8 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PySide6.QtCore import (Qt, QAbstractListModel, QModelIndex, QSize, QThread,
-                            Signal, QObject, QTimer, QUrl, QLockFile, QStandardPaths, QEvent, QPoint, QRect, QItemSelection, QItemSelectionModel)
-from PySide6.QtGui import QIcon, QPixmap, QDesktopServices, QAction, QColor, QCursor, QImage, QPainter
+                            Signal, QObject, QTimer, QUrl, QLockFile, QStandardPaths, QEvent, QPoint, QPointF, QRect, QItemSelection, QItemSelectionModel)
+from PySide6.QtGui import QIcon, QPixmap, QDesktopServices, QAction, QColor, QCursor, QImage, QPainter, QPolygonF
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTreeWidget, QTreeWidgetItem, QListView, QSplitter, QCheckBox,
     QLineEdit, QSpinBox, QLabel, QFileDialog, QMessageBox, QSystemTrayIcon, QMenu,
@@ -201,7 +201,8 @@ class ThumbnailModel(QAbstractListModel):
 
     @staticmethod
     def key(row):
-        return row['id'],row['registration_uid'],row['revision']
+        key = row['id'],row['registration_uid'],row['revision']
+        return (*key,row['search_page']) if 'search_page' in row else key
 
     def __init__(self, db):
         super().__init__()
@@ -251,7 +252,10 @@ class ThumbnailModel(QAbstractListModel):
             pages = tr('［{v0}ページ］',v0=row['page_count']) if row.get('page_count',1)>1 else ''
             if row.get('page_count')==0:
                 pages = tr('［空ファイル］') if row['size']==0 else tr('［空のPPT］')
-            return ('★ ' if row.get('favorite') else '')+mark+pages+row['name']
+            label = ('★ ' if row.get('favorite') else '')+mark+pages+row['name']
+            if 'search_rank' in row:
+                label = tr('{rank}. {name}\n一致ページ: {page}',rank=row['search_rank'],name=label,page=row['search_page'])
+            return label
         if role == Qt.ItemDataRole.ToolTipRole:
             return row['path']+f"\n{row['size']:,} bytes"+ ('\n'+row['error'] if row['error'] else '')
         if role == Qt.ItemDataRole.ForegroundRole and row['missing']:
@@ -269,7 +273,9 @@ class ThumbnailModel(QAbstractListModel):
 
     def load(self, key):
         try:
-            data = self.db.thumbnail(*key)
+            data = self.db.page_thumbnail(*key) if len(key)==4 else self.db.thumbnail(*key)
+            if data is None and len(key)==4 and key[3]==1:
+                data = self.db.thumbnail(*key[:3])
         except Exception:
             data = None
         self.signals.ready.emit(key,data)
@@ -321,7 +327,7 @@ class PageBadgeDelegate(QStyledItemDelegate):
         if count<=1:
             return
         painter.save()
-        text = f'{count} p'
+        text = f"{row['search_page']} / {count} p" if 'search_page' in row else f'{count} p'
         width = option.fontMetrics.horizontalAdvance(text)+16
         rect = QRect(option.rect.right()-width-8,option.rect.top()+6,width,24)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -406,7 +412,7 @@ class HoverListView(QListView):
             self.clear_hover()
             return
         row = self.model().items[index.row()]
-        if row.get('page_count',1)>1 and not isinstance(self.model(),PageModel):
+        if row.get('page_count',1)>1 and not isinstance(self.model(),PageModel) and 'search_page' not in row:
             screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
             area = screen.availableGeometry()
             request = (key,int(area.width()*.85),int(area.height()*.85),self.show_scale_bar)
@@ -424,7 +430,15 @@ class HoverListView(QListView):
             return
         pixmap=icon.pixmap(QSize(512,512),1.0)
         if self.show_scale_bar:
-            pixmap=QPixmap.fromImage(overlay(pixmap.toImage(),page_scale(row,row.get('page_number',1))))
+            pixmap=QPixmap.fromImage(overlay(pixmap.toImage(),page_scale(row,row.get('search_page',row.get('page_number',1)))))
+        if row.get('search_polygon'):
+            image = pixmap.toImage()
+            scale = max(image.width(),image.height())/min(512,max(image.width(),image.height()))
+            painter = QPainter(image)
+            painter.setPen(QColor('#00e5ff'))
+            painter.drawPolygon(QPolygonF([QPointF(x*scale,y*scale) for x,y in row['search_polygon']]))
+            painter.end()
+            pixmap = QPixmap.fromImage(image)
         self.display_popup(pixmap,QCursor.pos())
 
     def build_tiles(self,request,row):
@@ -446,7 +460,7 @@ class HoverListView(QListView):
                 for page in range(1,count+1):
                     if self.hover_key != key:
                         return
-                    blob = self.model().db.page_thumbnail(*key,page)
+                    blob = self.model().db.page_thumbnail(*key[:3],page)
                     image = QImage.fromData(blob) if blob else QImage()
                     x,y = ((page-1)%columns)*cellw,((page-1)//columns)*cellh
                     if not image.isNull():
@@ -563,6 +577,7 @@ class DetailsWindow(QWidget):
     def __init__(self, db, row, parent=None):
         super().__init__(parent)
         self.db, self.uid = db, row['registration_uid']
+        self.search_info = None
         self.setWindowTitle(tr('メタ情報・メモ — ')+row['name'])
         self.resize(720,720)
         layout = QVBoxLayout(self)
@@ -615,6 +630,7 @@ class DetailsWindow(QWidget):
     def set_row(self,row):
         self.save_timer.stop()
         self.loading = True
+        self.search_info = row if row and 'search_page' in row else None
         if row is None:
             self.uid = None
             self.info.setPlainText(tr('ファイルを選択してください。'))
@@ -650,6 +666,11 @@ class DetailsWindow(QWidget):
         lines = [row['path'], tr('種類: {v0}',v0=row['kind']), tr('サイズ: {v0:,} bytes',v0=row['size']),
                  tr('更新日時: ')+datetime.fromtimestamp(row['mtime_ns']/1e9).isoformat(' ',timespec='seconds'),
                  tr('ページ数: {v0}',v0=row['page_count']), tr('エラー: ')+(translate_message(row['error']) if row['error'] else tr('なし'))]
+        hit = self.search_info
+        if hit and hit['revision']==row['revision']:
+            lines.extend([tr('一致ページ: {v0}',v0=hit['search_page']),
+                          tr('類似度指標: {v0:.3f}（確率ではありません）',v0=hit['search_similarity']),
+                          tr('対応する特徴点: {v0}',v0=hit['search_inliers'])])
         if row['page_count']>MAX_PAGE_THUMBNAILS:
             lines.append(tr('サムネイルは先頭20ページまで表示します。'))
         if row['missing']:
@@ -723,7 +744,12 @@ class Window(QMainWindow):
         self.count_future = None
         self.annotation_export_future = None
         self.ppt_export_dialog = None
-        self.image_search_dialog = None
+        self.image_search_panel = None
+        self.image_search_hits = None
+        self.image_search_visible = False
+        self.image_search_serial = 0
+        self.normal_search_options = None
+        self.result_selection = None
         self.screen_capture = None
         self.pending_search_selection = None
         self.cached_counts = dict(total=0,complete=0,pending=0,timeout=0,errors=0)
@@ -770,6 +796,7 @@ class Window(QMainWindow):
         self.search.setClearButtonEnabled(True)
         filters.addWidget(self.search,1)
         self.image_search_button = QPushButton('画像検索')
+        self.image_search_button.setCheckable(True)
         self.image_search_button.clicked.connect(self.start_image_search)
         filters.addWidget(self.image_search_button)
         self.kind_filter = QComboBox()
@@ -881,6 +908,8 @@ class Window(QMainWindow):
         self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self.update_progress)
         self.stats_timer.start(1000)
+        self.search_panel_slot = QVBoxLayout()
+        layout.addLayout(self.search_panel_slot)
         split = self.splitter = QSplitter()
         split.setHandleWidth(8)
         split.setChildrenCollapsible(False)
@@ -989,8 +1018,28 @@ class Window(QMainWindow):
     def start_image_search(self):
         if self.exiting or self.screen_capture is not None:
             return
-        if self.image_search_dialog is not None and self.image_search_dialog.worker is not None:
-            self.image_search_dialog.raise_()
+        panel = self.ensure_image_search_panel()
+        panel.setVisible(panel.isHidden())
+        self.image_search_button.setChecked(not panel.isHidden())
+
+    def ensure_image_search_panel(self):
+        from image_search_dialog import ImageSearchPanel
+        if self.image_search_panel is None:
+            panel = ImageSearchPanel(self.db,self)
+            self.image_search_panel = panel
+            panel.hide()
+            self.search_panel_slot.addWidget(panel)
+            panel.scope_provider = lambda: [r['registration_uid'] for r in self.model.items]
+            panel.capture_requested.connect(self.capture_image_search)
+            panel.results_ready.connect(self.show_image_search_results)
+            panel.toggle_results_requested.connect(self.toggle_image_search_results)
+        return self.image_search_panel
+
+    def capture_image_search(self):
+        if self.exiting or self.screen_capture is not None:
+            return
+        if self.image_search_panel is not None and self.image_search_panel.worker is not None:
+            self.show_window()
             return
         from screen_capture import ScreenCapture
         self.view.clear_hover()
@@ -1014,27 +1063,63 @@ class Window(QMainWindow):
 
     def image_captured(self,image):
         self.capture_finished()
-        from image_search_dialog import ImageSearchDialog
-        if self.image_search_dialog is None:
-            dialog = ImageSearchDialog(self.db,image,
-                [r['registration_uid'] for r in self.model.items],self)
-            self.image_search_dialog = dialog
-            dialog.capture_requested.connect(self.start_image_search)
-            dialog.catalog_requested.connect(self.select_search_result)
-            dialog.destroyed.connect(lambda:setattr(self,'image_search_dialog',None))
-        else:
-            dialog = self.image_search_dialog
-            dialog.set_query(image)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        if self.exiting: return
+        panel = self.ensure_image_search_panel()
+        panel.show()
+        self.image_search_button.setChecked(True)
+        panel.set_query(image)
 
-    def select_search_result(self,uid):
-        # Navigation is metadata-only; opening the original remains explicit.
-        self.pending_search_selection = uid
-        self.clear_filters()
-        if self.tree.topLevelItemCount():
-            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+    def show_image_search_results(self, report):
+        if self.exiting: return
+        self.view.clear_hover()
+        self.image_search_hits = tuple(dict(hit) for hit in report.hits)
+        self.image_search_serial += 1
+        self.result_selection = report.hits[0]['registration_uid'] if report.hits else None
+        if not self.image_search_visible:
+            self.toggle_image_search_results()
+        else:
+            self.pending_search_selection = self.result_selection
+            self.schedule_refresh()
+
+    def toggle_image_search_results(self):
+        if self.image_search_hits is None: return
+        if self.details.dirty() and not self.details.save(): return
+        if not self.image_search_visible:
+            self.normal_search_options = self.list_options()[:9]
+            self.normal_search_selection = self.details.uid
+            self.image_search_visible = True
+            self.clear_filters()
+            self.recursive.setChecked(True)
+            if self.tree.topLevelItemCount(): self.tree.setCurrentItem(self.tree.topLevelItem(0))
+            if self.sort_order.findData('similarity') < 0:
+                self.sort_order.addItem(tr('類似度順'),'similarity')
+                self.sort_order.setItemData(self.sort_order.count()-1,'類似度順',Qt.ItemDataRole.UserRole+1)
+            self.sort_order.setCurrentIndex(self.sort_order.findData('similarity'))
+            self.pending_search_selection = self.result_selection
+        else:
+            self.result_selection = self.details.uid
+            self.image_search_visible = False
+            idx = self.sort_order.findData('similarity')
+            if idx >= 0: self.sort_order.removeItem(idx)
+            folder, recursive, missing, text, timeouts, errors, kind, order, favorite = self.normal_search_options
+            self.search.setText(text)
+            self.recursive.setChecked(recursive)
+            self.missing.setChecked(missing)
+            self.timeouts.setChecked(timeouts)
+            self.errors.setChecked(errors)
+            self.favorites.setChecked(favorite)
+            self.kind_filter.setCurrentIndex(max(0,self.kind_filter.findData(kind)))
+            self.sort_order.setCurrentIndex(max(0,self.sort_order.findData(order)))
+            item = QTreeWidgetItemIterator(self.tree)
+            found = False
+            while item.value():
+                if item.value().data(0,Qt.ItemDataRole.UserRole)==folder:
+                    self.tree.setCurrentItem(item.value()); found = True; break
+                item += 1
+            if not found and self.tree.topLevelItemCount(): self.tree.setCurrentItem(self.tree.topLevelItem(0))
+            self.pending_search_selection = self.normal_search_selection
+        self.image_search_panel.set_results_visible(self.image_search_visible)
+        self.view.setGridSize(QSize(210,210 if self.image_search_visible else 188))
         self.schedule_refresh()
 
     def search_help(self):
@@ -1081,6 +1166,7 @@ class Window(QMainWindow):
         self.pause_button.setText(tr('生成を再開') if self.service.paused else tr('生成を一時停止'))
         self.update_progress()
         self.feature_index.retranslate()
+        if self.image_search_panel is not None: self.image_search_panel.retranslate()
         if refresh:
             self._tree_signature = None
             self.refresh()
@@ -1114,7 +1200,8 @@ class Window(QMainWindow):
     def list_options(self):
         return (self.folder(),self.recursive.isChecked(),self.missing.isChecked(),
                 self.search.text(),self.timeouts.isChecked(),self.errors.isChecked(),
-                self.kind_filter.currentData(),self.sort_order.currentData(),self.favorites.isChecked())
+                self.kind_filter.currentData(),self.sort_order.currentData(),self.favorites.isChecked(),
+                self.image_search_visible,self.image_search_serial)
 
     def refresh(self):
         if self.exiting: return
@@ -1123,9 +1210,22 @@ class Window(QMainWindow):
             return
         options=self.list_options()
         self.list_request=options
+        hits = self.image_search_hits if options[9] else None
         def load():
-            rows=self.db.rows(*options[:6],kind=options[6],sort=options[7])
+            by_uid = {hit['registration_uid']:(rank,hit) for rank,hit in enumerate(hits,1)} if hits is not None else None
+            rows=self.db.rows(*options[:6],kind=options[6],sort=options[7],registrations=by_uid)
             if options[8]: rows=[r for r in rows if r['favorite']]
+            if by_uid is not None:
+                results = []
+                for row in rows:
+                    rank,hit = by_uid[row['registration_uid']]
+                    # Revalidate live metadata on every catalog refresh. Deleted,
+                    # missing, re-registered and regenerated files cannot reappear.
+                    if row['missing'] or row['id']!=hit['id'] or row['revision']!=hit['revision']: continue
+                    results.append(dict(row, search_rank=rank, search_page=hit['page_number'],
+                                        search_similarity=hit['similarity'], search_inliers=hit['inliers'],
+                                        search_polygon=hit['polygon']))
+                rows = sorted(results,key=lambda r:r['search_rank']) if options[7]=='similarity' else results
             return self.db.roots(),self.db.folders(),rows
         self.list_future=self.ui_pool.submit(load)
 
@@ -1229,6 +1329,8 @@ class Window(QMainWindow):
         if self.details.uid:
             current = next((i for i,r in enumerate(rows) if r['registration_uid']==self.details.uid),None)
             if current is not None:
+                self.details.search_info = rows[current] if 'search_page' in rows[current] else None
+                self.details.reload_info()
                 self.view.selectionModel().setCurrentIndex(self.model.index(current),QItemSelectionModel.SelectionFlag.NoUpdate)
             elif not self.details.dirty():
                 self.details.set_row(None)
@@ -1326,7 +1428,14 @@ class Window(QMainWindow):
             self.view.selectionModel().blockSignals(False)
             return
         row = self.model.items[current.row()] if current.isValid() else None
-        self.details.set_row(self.db.file_record(row['registration_uid']) if row else None)
+        live = self.db.file_record(row['registration_uid']) if row else None
+        if row and 'search_page' in row:
+            if live and not live['missing'] and live['revision']==row['revision']:
+                live.update({k:v for k,v in row.items() if k.startswith('search_')})
+            else:
+                live = None
+                self.schedule_refresh()
+        self.details.set_row(live)
 
     def pause_generation(self,paused):
         self.service.paused = paused
@@ -1555,9 +1664,9 @@ class Window(QMainWindow):
             return
         if self.screen_capture is not None:
             self.screen_capture.finish()
-        if self.image_search_dialog is not None:
-            running = self.image_search_dialog.worker is not None
-            self.image_search_dialog.close()
+        if self.image_search_panel is not None:
+            running = self.image_search_panel.worker is not None
+            self.image_search_panel.shutdown()
             if running:
                 QTimer.singleShot(100,self.quit_app)
                 return

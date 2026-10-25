@@ -5,6 +5,18 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    '範囲選択': 'Select region',
+    '検索パネルを閉じる': 'Close search panel',
+    '「範囲選択」で検索する画像を指定してください。': 'Use Select region to choose an image to search for.',
+    '全件の部分一致を照合（低速）': 'Verify partial matches in every page (slow)',
+    '通常は全画像の類似度を比較し、上位300ページの特徴点を照合します。ONでは全ページを照合します。': 'Normally compares all image vectors and verifies local features in the top 300 pages. Enable to verify every page.',
+    '検索結果を表示': 'Show search results',
+    '通常の一覧に戻る': 'Back to catalog',
+    '類似度順': 'Similarity order',
+    '検索を中止しました。前の検索結果は保持されています。': 'Search cancelled. Previous results are retained.',
+    '画像検索に失敗しました: {error}': 'Image search failed: {error}',
+    '画像検索: {pages}ページを比較 / 特徴点照合 {compared}ページ / 結果 {hits}ファイル / 未生成 {absent} / 読込不可 {errors}': 'Image search: {pages} pages compared / {compared} verified / {hits} files found / No thumbnail: {absent} / Unreadable: {errors}',
+    '{rank}. {name}\n一致ページ: {page}': '{rank}. {name}\nMatching page: {page}',
     'DINOv2モデルを取得中…（初回のみ、約88 MB）': 'Downloading DINOv2 model… (first use only, about 88 MB)',
     'DINOv2モデルを読み込み中…': 'Loading DINOv2 model…',
     'DINOv2モデルが未取得のため、初回に約88 MBをダウンロードします。画像は送信しません。': 'The DINOv2 model is missing. About 88 MB will be downloaded on first use. No images are uploaded.',

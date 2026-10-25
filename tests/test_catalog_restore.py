@@ -8,6 +8,19 @@ from catalog_restore import prepare_restore,inspect_backup,selected_catalog,sele
 
 
 class RestoreTests(unittest.TestCase):
+    def test_only_exact_search_triggers_are_accepted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db=Catalog(Path(temp)/'catalog.sqlite3')
+            self.assertEqual(inspect_backup(db.path),([],0))
+            with db.connect() as c:
+                c.execute('DROP TRIGGER visual_search_insert')
+                c.execute('CREATE TRIGGER visual_search_insert AFTER INSERT ON visual_features BEGIN DELETE FROM files; END')
+            with self.assertRaises(ValueError): inspect_backup(db.path)
+            with db.connect() as c:
+                names=[r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")]
+                for name in names: c.execute('DROP TRIGGER '+name)
+            self.assertEqual(inspect_backup(db.path),([],0),'legacy backups without triggers must remain supported')
+
     def test_full_restore_relocation_and_selection(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp);root=base/'source';root.mkdir();(root/'a.tif').write_bytes(b'original')

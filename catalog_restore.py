@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from catalog import Catalog,norm,within
 from annotation_import import path_key
+from search_cache_schema import known_trigger
 
 
 def open_backup(path):
@@ -17,7 +18,8 @@ def open_backup(path):
         c.execute('PRAGMA trusted_schema=OFF')
         c.execute('BEGIN')
         objects=list(c.execute("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"))
-        if any(kind in ('trigger','view') or 'VIRTUAL TABLE' in (sql or '').upper() for kind,name,sql in objects):
+        if any(kind=='view' or (kind=='trigger' and not known_trigger(name,sql)) or
+               'VIRTUAL TABLE' in (sql or '').upper() for kind,name,sql in objects):
             raise ValueError('復元できないDB形式です。')
         for table,columns in {'roots':{'id','path'},'files':{'id','root_id','path','parent','name','kind','size','mtime_ns','memo','tags','favorite'},'thumbs':{'file_id','data'},'settings':{'key','value'}}.items():
             if not columns<={r[1] for r in c.execute(f'PRAGMA table_info({table})')}:
