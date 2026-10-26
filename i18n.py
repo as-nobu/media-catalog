@@ -5,6 +5,11 @@ from string import Formatter
 _language = 'ja'
 
 EN = {
+    '輝度補正': 'Brightness',
+    '0（オフ）': '0 (off)',
+    '0で補正オフ。50は従来の控えめな補正です。表示だけを変更します。': '0 turns correction off. 50 matches the previous mild correction. Display only.',
+    '輝度自動調整': 'Auto brightness',
+    '保存済み画像の表示だけを明るくします。元画像・検索データは変更しません。': 'Brighten cached images for display only. Originals and search data are unchanged.',
     '範囲選択': 'Select region',
     '検索パネルを閉じる': 'Close search panel',
     '「範囲選択」で検索する画像を指定してください。': 'Use Select region to choose an image to search for.',

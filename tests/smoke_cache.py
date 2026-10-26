@@ -93,6 +93,10 @@ class CacheTests(unittest.TestCase):
     def test_legacy_migration_preserves_thumbnail_and_identity(self):
         old=self.register(self.a,'red')
         with self.db.connect() as c:
+            # A legacy DB predates the search triggers as well as this column.
+            from search_cache_schema import TRIGGERS
+            for name in TRIGGERS:
+                c.execute('DROP TRIGGER IF EXISTS '+name)
             c.execute('DROP INDEX files_registration_uid')
             c.execute('ALTER TABLE files DROP COLUMN registration_uid')
         upgraded=Catalog(self.db.path)

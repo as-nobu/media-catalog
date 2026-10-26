@@ -18,7 +18,7 @@ from PySide6.QtGui import QIcon, QPixmap, QDesktopServices, QAction, QColor, QCu
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTreeWidget, QTreeWidgetItem, QListView, QSplitter, QCheckBox,
     QLineEdit, QSpinBox, QLabel, QFileDialog, QMessageBox, QSystemTrayIcon, QMenu,
-    QAbstractItemView, QStyle, QComboBox)
+    QAbstractItemView, QStyle, QComboBox, QSlider)
 from PySide6.QtWidgets import QTreeWidgetItemIterator, QDialog, QStyledItemDelegate, QPlainTextEdit
 from datetime import datetime
 from catalog import Catalog, norm, within
@@ -26,6 +26,8 @@ from limits import MAX_PAGE_THUMBNAILS, EMPTY_FILE_KINDS
 from theme import STYLE
 from i18n import set_language, get_language, tr, translate_message, static_source
 from qt_i18n import install_dialog_translator
+from display_brightness import auto_brightness, saved_strength, clamp_strength
+from thumbnail_delegate import PageBadgeDelegate
 
 
 class Service(QThread):
@@ -209,6 +211,8 @@ class ThumbnailModel(QAbstractListModel):
         self.db, self.items = db, []
         self.cache = OrderedDict()
         self.pending = set()
+        self.brightness_strength = saved_strength(db)
+        self.display_generation = 0
         self.pool = ThreadPoolExecutor(max_workers=2,thread_name_prefix='db-thumbnail')
         self.signals = LoaderSignals()
         self.signals.ready.connect(self.loaded)
@@ -216,6 +220,19 @@ class ThumbnailModel(QAbstractListModel):
         pix = QPixmap(160,110)
         pix.fill(QColor('#e4e8ee'))
         self.placeholder = QIcon(pix)
+
+    def set_brightness_strength(self, strength):
+        strength = clamp_strength(strength)
+        if self.brightness_strength == strength:
+            return
+        self.brightness_strength = strength
+        self.display_generation += 1
+        self.cache.clear()
+        # Keep pending requests counted until they finish: rapid toggling must
+        # not create an unbounded queue or let old display copies enter cache.
+        if self.items:
+            self.dataChanged.emit(self.index(0),self.index(len(self.items)-1),
+                                  [Qt.ItemDataRole.DecorationRole])
 
     def reset(self, rows):
         valid = {self.key(r) for r in rows}
@@ -265,28 +282,43 @@ class ThumbnailModel(QAbstractListModel):
             if key in self.cache:
                 self.cache.move_to_end(key)
                 return self.cache[key]
-            if key not in self.pending and len(self.pending)<200:
-                self.pending.add(key)
-                self.pool.submit(self.load,key)
+            request = (key,self.display_generation)
+            if request not in self.pending and len(self.pending)<200:
+                self.pending.add(request)
+                self.pool.submit(self.load,request,self.brightness_strength)
             return self.placeholder
         return None
 
-    def load(self, key):
+    def load(self, request, strength=0):
+        key,generation = request
+        if generation != self.display_generation:
+            self.signals.ready.emit(request,None)
+            return
         try:
             data = self.db.page_thumbnail(*key) if len(key)==4 else self.db.thumbnail(*key)
             if data is None and len(key)==4 and key[3]==1:
                 data = self.db.thumbnail(*key[:3])
+            image = QImage.fromData(data) if data else QImage()
+            if strength and generation == self.display_generation:
+                image = auto_brightness(image,strength)
         except Exception:
-            data = None
-        self.signals.ready.emit(key,data)
+            image = QImage()
+        self.signals.ready.emit(request,image)
 
     def loaded(self, key, data):
-        self.pending.discard(key)
+        generation = self.display_generation
+        if len(key)==2 and isinstance(key[0],tuple):
+            self.pending.discard(key)
+            key,generation = key
         position = self.positions.get(key)
         if position is None or self.key(self.items[position]) != key:
             return  # Completion from a removed registration or older revision.
-        pix = QPixmap()
-        icon = QIcon(pix) if data and pix.loadFromData(data) else self.placeholder
+        if generation != self.display_generation:
+            # A freed queue slot lets the view request the current display mode.
+            self.dataChanged.emit(self.index(position),self.index(position),[Qt.ItemDataRole.DecorationRole])
+            return
+        image = data if isinstance(data,QImage) else QImage.fromData(data) if data else QImage()
+        icon = QIcon(QPixmap.fromImage(image)) if not image.isNull() else self.placeholder
         self.cache[key] = icon
         while len(self.cache)>600:
             self.cache.popitem(last=False)
@@ -308,34 +340,6 @@ class PageModel(ThumbnailModel):
         if index.isValid() and role==Qt.ItemDataRole.DisplayRole:
             return tr('{v0} ページ',v0=self.items[index.row()]['page_number'])
         return super().data(index,role)
-
-    def load(self,key):
-        try:
-            blob = self.db.page_thumbnail(*key)
-            if blob is None and key[3]==1:
-                blob = self.db.thumbnail(*key[:3])
-        except Exception:
-            blob = None
-        self.signals.ready.emit(key,blob)
-
-
-class PageBadgeDelegate(QStyledItemDelegate):
-    def paint(self,painter,option,index):
-        super().paint(painter,option,index)
-        row = index.model().items[index.row()]
-        count = row.get('page_count',1)
-        if count<=1:
-            return
-        painter.save()
-        text = f"{row['search_page']} / {count} p" if 'search_page' in row else f'{count} p'
-        width = option.fontMetrics.horizontalAdvance(text)+16
-        rect = QRect(option.rect.right()-width-8,option.rect.top()+6,width,24)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor('#25364b'))
-        painter.drawRoundedRect(rect,4,4)
-        painter.setPen(QColor('white'))
-        painter.drawText(rect,Qt.AlignmentFlag.AlignCenter,text)
-        painter.restore()
 
 
 from scale_overlay import overlay, page_scale
@@ -373,6 +377,11 @@ class HoverListView(QListView):
         self.pointer_timer.stop()
         self.hover_key = None
         self.popup.hide()
+
+    def set_brightness_strength(self, strength):
+        self.clear_hover()
+        self.tiles_cache.clear()
+        self.model().set_brightness_strength(strength)
 
     def eventFilter(self,watched,event):
         if watched is self.viewport():
@@ -415,7 +424,8 @@ class HoverListView(QListView):
         if row.get('page_count',1)>1 and not isinstance(self.model(),PageModel) and 'search_page' not in row:
             screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
             area = screen.availableGeometry()
-            request = (key,int(area.width()*.85),int(area.height()*.85),self.show_scale_bar)
+            request = (key,int(area.width()*.85),int(area.height()*.85),self.show_scale_bar,
+                       self.model().brightness_strength,self.model().display_generation)
             if request in self.tiles_cache:
                 self.display_popup(QPixmap.fromImage(self.tiles_cache[request]),QCursor.pos())
             elif self.tiles_pending != request:
@@ -458,10 +468,12 @@ class HoverListView(QListView):
             painter = QPainter(canvas)
             try:
                 for page in range(1,count+1):
-                    if self.hover_key != key:
+                    if self.hover_key != key or (len(request)>5 and request[5]!=self.model().display_generation):
                         return
                     blob = self.model().db.page_thumbnail(*key[:3],page)
                     image = QImage.fromData(blob) if blob else QImage()
+                    if len(request)>4 and request[4]:
+                        image = auto_brightness(image,request[4])
                     x,y = ((page-1)%columns)*cellw,((page-1)//columns)*cellh
                     if not image.isNull():
                         scaled = image.scaled(side,side,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation)
@@ -481,7 +493,8 @@ class HoverListView(QListView):
                 self.tiles_pending = None
 
     def tiles_ready(self,request,canvas):
-        if self.hover_key != request[0] or canvas is None:
+        if (self.hover_key != request[0] or canvas is None or
+                (len(request)>5 and request[5]!=self.model().display_generation)):
             return
         self.tiles_cache[request] = canvas
         while len(self.tiles_cache)>2:
@@ -528,6 +541,7 @@ class PagesWindow(QDialog):
         self.status = QLabel()
         layout.addWidget(self.status)
         self.view = HoverListView(self)
+        self.view.setItemDelegate(PageBadgeDelegate(self.view))
         self.view.setViewMode(QListView.ViewMode.IconMode)
         self.view.setResizeMode(QListView.ResizeMode.Adjust)
         self.view.setLayoutMode(QListView.LayoutMode.Batched)
@@ -823,6 +837,22 @@ class Window(QMainWindow):
         filters.addWidget(self.timeouts)
         self.errors = QCheckBox('エラーのみ')
         filters.addWidget(self.errors)
+        self.brightness_label = QLabel('輝度補正')
+        filters.addWidget(self.brightness_label)
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setRange(0,100)
+        self.brightness_slider.setPageStep(10)
+        self.brightness_slider.setFixedWidth(120)
+        self.brightness_slider.setValue(saved_strength(db))
+        self.brightness_label.setBuddy(self.brightness_slider)
+        filters.addWidget(self.brightness_slider)
+        self.brightness_value = QLabel()
+        self.brightness_value.setMinimumWidth(54)
+        filters.addWidget(self.brightness_value)
+        self.brightness_timer = QTimer(self)
+        self.brightness_timer.setSingleShot(True)
+        self.brightness_timer.setInterval(100)
+        self.brightness_timer.timeout.connect(self.apply_brightness_strength)
         filters.addStretch()
         clear_button = QPushButton('絞り込み解除')
         clear_button.clicked.connect(self.clear_filters)
@@ -991,6 +1021,8 @@ class Window(QMainWindow):
         self.timeout.valueChanged.connect(self.settings_changed)
         self.max_image_mp.valueChanged.connect(self.settings_changed)
         self.scale_bars.toggled.connect(self.settings_changed)
+        self.brightness_slider.valueChanged.connect(self.brightness_changed)
+        self.brightness_slider.sliderReleased.connect(self.apply_brightness_strength)
         self.tray = QSystemTrayIcon(self.windowIcon(),self)
         self.tray.setToolTip('Media Catalog')
         menu = QMenu(self)
@@ -1141,8 +1173,11 @@ class Window(QMainWindow):
     def retranslate_ui(self,refresh=True):
         self.setWindowTitle(tr('Media Catalog — 画像・動画・PowerPoint'))
         self.view.clear_hover()
+        self.update_brightness_label()
+        self.brightness_slider.setAccessibleName(tr('輝度補正'))
+        self.brightness_slider.setToolTip(tr('0で補正オフ。50は従来の控えめな補正です。表示だけを変更します。'))
         for widget in self.findChildren(QWidget):
-            if isinstance(widget,(QLabel,QPushButton,QCheckBox)) and widget not in (self.view.popup,self.details.status,self.count,self.progress_label,self.pause_button,self.feature_index.label,self.feature_index.notice):
+            if isinstance(widget,(QLabel,QPushButton,QCheckBox)) and widget not in (self.view.popup,self.details.status,self.count,self.progress_label,self.pause_button,self.feature_index.label,self.feature_index.notice,self.brightness_value):
                 self._translate_property(widget,'i18nText',widget.text,widget.setText)
             if isinstance(widget,QLineEdit):
                 self._translate_property(widget,'i18nPlaceholder',widget.placeholderText,widget.setPlaceholderText)
@@ -1344,6 +1379,25 @@ class Window(QMainWindow):
                 self.view.setCurrentIndex(index)
                 self.view.scrollTo(index)
             self.pending_search_selection = None
+
+    def update_brightness_label(self):
+        strength = self.brightness_slider.value()
+        self.brightness_value.setText(str(strength) if strength else tr('0（オフ）'))
+
+    def brightness_changed(self, value):
+        self.update_brightness_label()
+        # Throttle continuous dragging; always flush the final value on release.
+        if not self.brightness_timer.isActive():
+            self.brightness_timer.start()
+
+    def apply_brightness_strength(self):
+        self.brightness_timer.stop()
+        strength = self.brightness_slider.value()
+        if strength == self.model.brightness_strength:
+            return
+        self.db.set_setting('display_brightness_strength',strength)
+        for view in self.findChildren(HoverListView):
+            view.set_brightness_strength(strength)
 
     def settings_changed(self,*args):
         self.service.scan_enabled=self.auto_scan.isChecked()
@@ -1684,6 +1738,7 @@ class Window(QMainWindow):
             if not window.close():
                 return
         self.exiting = True
+        self.apply_brightness_strength()
         self.setEnabled(False)
         self.statusBar().showMessage(tr('終了処理中…'))
         self.refresh_timer.stop()
